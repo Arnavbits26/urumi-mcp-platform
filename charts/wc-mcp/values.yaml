@@ -1,0 +1,23 @@
+image:
+  repository: urumi/wc-mcp
+  tag: dev
+  pullPolicy: IfNotPresent    # local images are imported into k3d, never pulled
+
+wc:
+  baseUrl: http://wordpress           # in-cluster WordPress Service
+  secretName: wc-api-credentials      # keys: consumer-key, consumer-secret
+
+service:
+  port: 8000                          # ClusterIP only: there is deliberately no Ingress
+
+# Only these peers may reach the MCP server. Disabled until the gateway exists (v0.3.0).
+networkPolicy:
+  enabled: false
+  allowFrom: []
+  # allowFrom:
+  #   - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: gateway } }
+  #     podSelector: { matchLabels: { app.kubernetes.io/name: gateway-backend } }
+
+resources:
+  requests: { cpu: 50m, memory: 96Mi }
+  limits:   { cpu: 500m, memory: 256Mi }

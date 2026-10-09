@@ -1,0 +1,4 @@
+# mcp is pinned below 2.x: 2.x renamed FastMCP and changed APIs (see docs/decisions/0002).
+mcp>=1.30,<2
+httpx>=0.28,<1
+uvicorn>=0.30
