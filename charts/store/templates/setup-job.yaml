@@ -1,0 +1,63 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: store-setup
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/name: store-setup
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 33        # www-data in the wordpress image; wordpress:cli defaults to 82
+        runAsGroup: 33
+        fsGroup: 33
+      containers:
+        - name: setup
+          image: {{ .Values.setupJob.image }}
+          command: ["sh", "/scripts/setup.sh"]
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: WP_CLI_CACHE_DIR, value: /tmp/wpcli-cache }
+            - { name: SITE_URL, value: {{ .Values.siteUrl | quote }} }
+            - { name: SITE_TITLE, value: {{ .Values.siteTitle | quote }} }
+            - { name: ADMIN_USER, value: {{ .Values.adminUser | quote }} }
+            - { name: ADMIN_EMAIL, value: {{ .Values.adminEmail | quote }} }
+            - { name: CURRENCY, value: {{ .Values.currency | quote }} }
+            - { name: DB_HOST, value: mariadb }
+            - { name: DB_NAME, value: wordpress }
+            - { name: DB_USER, value: wordpress }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: mariadb-password
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: wp-admin-password
+          resources:
+            {{- toYaml .Values.setupJob.resources | nindent 12 }}
+          volumeMounts:
+            - name: wordpress-data
+              mountPath: /var/www/html
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: wordpress-data
+          persistentVolumeClaim:
+            claimName: wordpress-data
+        - name: script
+          configMap:
+            name: store-setup-script

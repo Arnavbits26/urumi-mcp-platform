@@ -1,0 +1,12 @@
+# Production-like k3s VPS. Fill in your real domain before using. No secrets belong here.
+siteUrl: https://store.example.com
+host: store.example.com
+ingress:
+  className: traefik
+  tls:
+    enabled: true
+    secretName: store-tls     # created by cert-manager or manually
+persistence:
+  storageClass: local-path    # k3s default; change for block storage
+  wordpress: { size: 10Gi }
+  mariadb:   { size: 10Gi }

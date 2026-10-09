@@ -1,0 +1,46 @@
+# Public URL of the storefront INCLUDING port if non-standard. WordPress bakes this
+# into wp-config.php on first start (see docs/decisions/0001).
+siteUrl: http://store.localtest.me:8080
+host: store.localtest.me
+
+siteTitle: "Urumi Demo Store"
+adminUser: admin
+adminEmail: admin@example.com
+currency: USD
+
+# Existing Kubernetes Secret (created by scripts/store-secrets.sh, NOT by Helm).
+# Required keys: mariadb-root-password, mariadb-password, wp-admin-password
+secretName: store-secrets
+
+ingress:
+  enabled: true
+  className: traefik        # k3s/k3d ship Traefik by default
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+
+persistence:
+  storageClass: ""          # "" = cluster default (local-path on k3s/k3d)
+  wordpress:
+    size: 2Gi
+  mariadb:
+    size: 2Gi
+
+mariadb:
+  image: mariadb:11.4
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+wordpress:
+  image: wordpress:6-apache
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 768Mi }
+
+setupJob:
+  image: wordpress:cli
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 768Mi }

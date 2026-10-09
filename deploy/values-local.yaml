@@ -1,0 +1,5 @@
+# Local k3d cluster. Browser reaches the store via *.localtest.me (resolves to 127.0.0.1).
+siteUrl: http://store.localtest.me:8080
+host: store.localtest.me
+ingress:
+  className: traefik

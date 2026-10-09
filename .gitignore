@@ -1,0 +1,20 @@
+# secrets and local config - never commit
+.env
+*.env
+*.pem
+*.key
+kubeconfig*
+secrets/
+values-secret*.yaml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Python / Node
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/

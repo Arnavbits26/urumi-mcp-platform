@@ -1,0 +1,106 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wordpress-data
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.wordpress.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/name: wordpress
+spec:
+  selector:
+    app.kubernetes.io/name: wordpress
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  labels:
+    {{- include "store.labels" . | nindent 4 }}
+    app.kubernetes.io/name: wordpress
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate        # the PVC is ReadWriteOnce, so no overlapping pods
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wordpress
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" . | nindent 8 }}
+        app.kubernetes.io/name: wordpress
+    spec:
+      containers:
+        - name: wordpress
+          image: {{ .Values.wordpress.image }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: mariadb:3306
+            - name: WORDPRESS_DB_NAME
+              value: wordpress
+            - name: WORDPRESS_DB_USER
+              value: wordpress
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: mariadb-password
+            - name: WORDPRESS_CONFIG_EXTRA
+              value: |
+                define('WP_HOME', '{{ .Values.siteUrl }}');
+                define('WP_SITEURL', '{{ .Values.siteUrl }}');
+                define('FS_METHOD', 'direct');
+                if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+                  $_SERVER['HTTPS'] = 'on';
+                }
+          startupProbe:
+            httpGet:
+              path: /wp-login.php
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /wp-login.php
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /wp-login.php
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.wordpress.resources | nindent 12 }}
+          volumeMounts:
+            - name: wordpress-data
+              mountPath: /var/www/html
+      volumes:
+        - name: wordpress-data
+          persistentVolumeClaim:
+            claimName: wordpress-data
