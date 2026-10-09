@@ -1,0 +1,11 @@
+# Locks the WooCommerce MCP server down so ONLY the gateway pods can reach it.
+# Apply with: helm upgrade wc-mcp charts/wc-mcp -n store -f deploy/values-wc-mcp-netpol.yaml
+networkPolicy:
+  enabled: true
+  allowFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: gateway-backend

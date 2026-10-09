@@ -1,0 +1,7 @@
+# mcp stays on 1.x (see docs/decisions/0002).
+mcp>=1.30,<2
+fastapi>=0.115
+uvicorn>=0.30
+httpx>=0.28,<1
+asyncpg>=0.30
+cryptography>=43

@@ -1,0 +1,45 @@
+host: gateway.localtest.me
+
+image:
+  repository: urumi/gateway
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# Secret created by scripts/gateway-secrets.sh. Keys: postgres-password, encryption-key, bootstrap-admin-key
+secretName: gateway-secrets
+bootstrapAdminEmail: admin@example.com
+
+# Registered on first start (an admin can edit or remove them afterwards).
+seedServers:
+  - slug: woocommerce
+    name: WooCommerce
+    url: http://wc-mcp.store.svc.cluster.local:8000/mcp
+
+settings:
+  callTimeoutSeconds: 30
+  connectTimeoutSeconds: 5
+  refreshTimeoutSeconds: 10
+  refreshIntervalSeconds: 15
+  failThreshold: 2
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+
+persistence:
+  storageClass: ""
+  size: 2Gi
+
+postgres:
+  image: postgres:16-alpine
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 384Mi }
+
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits:   { cpu: 500m, memory: 384Mi }

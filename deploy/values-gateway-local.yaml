@@ -1,0 +1,4 @@
+# Local k3d cluster: reached at http://gateway.localtest.me:8080
+host: gateway.localtest.me
+ingress:
+  className: traefik
