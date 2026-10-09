@@ -17,7 +17,7 @@ spec:
         {{- include "store.labels" . | nindent 8 }}
         app.kubernetes.io/name: store-setup
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Never
       securityContext:
         runAsUser: 33        # www-data in the wordpress image; wordpress:cli defaults to 82
         runAsGroup: 33
@@ -37,6 +37,14 @@ spec:
             - { name: DB_HOST, value: mariadb }
             - { name: DB_NAME, value: wordpress }
             - { name: DB_USER, value: wordpress }
+            - { name: WORDPRESS_DB_HOST, value: mariadb:3306 }
+            - { name: WORDPRESS_DB_NAME, value: wordpress }
+            - { name: WORDPRESS_DB_USER, value: wordpress }
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretName }}
+                  key: mariadb-password
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:

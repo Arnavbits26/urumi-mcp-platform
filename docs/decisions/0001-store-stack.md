@@ -16,8 +16,8 @@ Secret by name, so no secret is in git or in values files.
 WordPress and WooCommerce, enable cash on delivery and add a shipping method. The script is
 idempotent.
 
-**Known caveat:** the WordPress image writes `WP_HOME`/`WP_SITEURL` into wp-config.php only on first
-start. Changing `siteUrl` later means editing wp-config.php or recreating the PVC.
+**Version pinning:** the latest WooCommerce requires WordPress 7.0+, so the chart uses
+`wordpress:7-apache`. The setup Job fails loudly if the plugin cannot be installed.
 
 **Single-node assumption:** the setup Job mounts the same ReadWriteOnce volume as WordPress. That is
 fine on one node (k3d, single-VPS k3s); a multi-node cluster would need RWX storage or a sidecar.

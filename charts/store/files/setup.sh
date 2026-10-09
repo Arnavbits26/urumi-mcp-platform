@@ -4,6 +4,8 @@ set -eu
 
 WP_PATH=/var/www/html
 wp() { php -d memory_limit=512M /usr/local/bin/wp --path="$WP_PATH" "$@"; }
+printf 'apache_modules:\n  - mod_rewrite\n' > /tmp/wp-cli.yml
+export WP_CLI_CONFIG_PATH=/tmp/wp-cli.yml
 
 echo "[setup] waiting for wp-config.php (created by the wordpress container)..."
 i=0
