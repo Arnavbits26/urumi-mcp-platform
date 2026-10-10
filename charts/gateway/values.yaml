@@ -15,6 +15,25 @@ seedServers:
     name: WooCommerce
     url: http://wc-mcp.store.svc.cluster.local:8000/mcp
 
+# Set to true once the site is served over https, so the browser only sends the login cookie over https.
+cookieSecure: false
+
+# The chat assistant uses any OpenAI-compatible AI service. The key is NOT here: it lives in the Secret
+# below, created by scripts/llm-secret.sh (key name: api-key). Without it the chat shows a setup note.
+llm:
+  baseUrl: https://api.groq.com/openai/v1
+  model: llama-3.3-70b-versatile
+  secretName: llm-credentials
+
+dashboard:
+  image:
+    repository: urumi/dashboard
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits:   { cpu: 200m, memory: 96Mi }
+
 settings:
   callTimeoutSeconds: 30
   connectTimeoutSeconds: 5

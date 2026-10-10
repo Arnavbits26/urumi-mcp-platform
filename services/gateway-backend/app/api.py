@@ -1,15 +1,19 @@
 """Admin and self-service REST API used by the dashboard (and by scripts)."""
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Literal
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from .auth import AuthUser, authenticate, bearer_token
+from .auth import AuthUser, authenticate, authenticate_session, bearer_token
 from .registry import public_name
-from .security import generate_api_key, validate_header_name, validate_upstream_url
+from .security import (DUMMY_PASSWORD_HASH, generate_api_key, generate_session_token, generate_temp_password,
+                       hash_password, hash_session_token, validate_header_name, validate_upstream_url,
+                       verify_password)
 
 router = APIRouter(prefix="/api")
 SLUG = r"^[a-z][a-z0-9-]{1,23}$"      # no underscore, so the "__" separator in tool names is unambiguous
@@ -19,10 +23,27 @@ def gw(request: Request):
     return request.app.state.gw
 
 
+SESSION_COOKIE = "urumi_session"
+CSRF_HEADER = ("x-requested-with", "urumi-dashboard")
+_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+
+
 async def current_user(request: Request) -> AuthUser:
-    user = await authenticate(gw(request).db, bearer_token(request.headers.get("authorization")))
+    """Authenticate with an API key (scripts, MCP clients) or a dashboard session cookie."""
+    g = gw(request)
+    token = bearer_token(request.headers.get("authorization"))
+    user = None
+    if token:
+        user = await authenticate(g.db, token)
+    elif request.cookies.get(SESSION_COOKIE):
+        user = await authenticate_session(g.db, request.cookies.get(SESSION_COOKIE))
+        # Browsers attach cookies automatically, so another website could forge a request. Requiring a
+        # custom header on changes blocks that: other sites cannot add it without a CORS preflight,
+        # and we never allow cross-origin requests.
+        if user and request.method not in _SAFE_METHODS and request.headers.get(CSRF_HEADER[0]) != CSRF_HEADER[1]:
+            raise HTTPException(403, "missing CSRF header")
     if user is None:
-        raise HTTPException(401, "invalid, revoked or missing API key", headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(401, "not signed in, or the key was revoked", headers={"WWW-Authenticate": "Bearer"})
     return user
 
 
@@ -30,6 +51,74 @@ async def admin_user(user: AuthUser = Depends(current_user)) -> AuthUser:
     if not user.is_admin:
         raise HTTPException(403, "admin role required")
     return user
+
+
+# ---------------------------------------------------------------------------- login and sessions
+class LoginIn(BaseModel):
+    email: str = Field(max_length=200)
+    password: str = Field(max_length=200)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(max_length=200)
+    new_password: str = Field(min_length=10, max_length=200)
+
+
+_MAX_FAILS, _WINDOW = 8, 600.0   # failed logins allowed per email + address in 10 minutes
+
+
+def _failures(g) -> dict:
+    if not hasattr(g, "login_failures"):
+        g.login_failures = {}
+    return g.login_failures
+
+
+def _throttled(g, key: str) -> bool:
+    now = time.monotonic()
+    recent = [t for t in _failures(g).get(key, []) if now - t < _WINDOW]
+    _failures(g)[key] = recent
+    return len(recent) >= _MAX_FAILS
+
+
+@router.post("/auth/login")
+async def login(body: LoginIn, request: Request, response: Response):
+    g = gw(request)
+    email = body.email.strip().lower()
+    throttle_key = f"{email}|{request.client.host if request.client else '?'}"
+    if _throttled(g, throttle_key):
+        raise HTTPException(429, "Too many failed attempts. Wait a few minutes and try again.")
+    row = await g.db.fetchrow("SELECT * FROM users WHERE email=$1", email)
+    # Always run one password check, even for unknown emails, so timing does not reveal which emails exist.
+    ok = await asyncio.to_thread(verify_password, body.password, row["password_hash"] if row else DUMMY_PASSWORD_HASH)
+    if not (row and ok and not row["disabled"]):
+        _failures(g).setdefault(throttle_key, []).append(time.monotonic())
+        raise HTTPException(401, "Incorrect email or password.")
+    token, token_hash = generate_session_token()
+    hours = g.settings.session_hours
+    await g.db.execute("INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, now() + make_interval(hours => $3))",
+                       row["id"], token_hash, hours)
+    await g.db.execute("DELETE FROM sessions WHERE expires_at < now()")
+    response.set_cookie(SESSION_COOKIE, token, max_age=hours * 3600, httponly=True, samesite="lax",
+                        secure=g.settings.cookie_secure, path="/")
+    return {"id": str(row["id"]), "email": row["email"], "name": row["name"], "role": row["role"]}
+
+
+@router.post("/auth/logout", status_code=204)
+async def logout(request: Request, response: Response, _: AuthUser = Depends(current_user)):
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if cookie:
+        await gw(request).db.execute("DELETE FROM sessions WHERE token_hash=$1", hash_session_token(cookie))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+
+
+@router.post("/me/password", status_code=204)
+async def change_password(body: PasswordChange, request: Request, user: AuthUser = Depends(current_user)):
+    g = gw(request)
+    row = await g.db.fetchrow("SELECT password_hash FROM users WHERE id=$1::uuid", user.id)
+    if not await asyncio.to_thread(verify_password, body.current_password, row["password_hash"]):
+        raise HTTPException(400, "Current password is incorrect.")
+    await g.db.execute("UPDATE users SET password_hash=$2 WHERE id=$1::uuid", user.id,
+                       await asyncio.to_thread(hash_password, body.new_password))
 
 
 # ---------------------------------------------------------------------------- servers
@@ -194,8 +283,9 @@ async def _new_key(g, user_id: str, name: str) -> dict:
 
 
 @router.get("/me")
-async def me(user: AuthUser = Depends(current_user)):
-    return {"id": user.id, "email": user.email, "role": user.role}
+async def me(request: Request, user: AuthUser = Depends(current_user)):
+    row = await gw(request).db.fetchrow("SELECT name FROM users WHERE id=$1::uuid", user.id)
+    return {"id": user.id, "email": user.email, "name": row["name"] if row else "", "role": user.role}
 
 
 @router.get("/users")
@@ -206,12 +296,27 @@ async def list_users(request: Request, _: AuthUser = Depends(admin_user)):
 @router.post("/users", status_code=201)
 async def invite_user(body: UserIn, request: Request, _: AuthUser = Depends(admin_user)):
     g = gw(request)
+    temp = generate_temp_password()
+    pw_hash = await asyncio.to_thread(hash_password, temp)
     try:
-        row = await g.db.fetchrow("INSERT INTO users (email, name, role) VALUES ($1,$2,$3) RETURNING *",
-                                  body.email.lower(), body.name, body.role)
+        row = await g.db.fetchrow("INSERT INTO users (email, name, role, password_hash) VALUES ($1,$2,$3,$4) RETURNING *",
+                                  body.email.lower(), body.name, body.role, pw_hash)
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(409, "a user with this email already exists") from exc
-    return {"user": user_out(row), "key": await _new_key(g, str(row["id"]), "first key")}
+    # Both secrets are shown to the admin exactly once, to hand to the new member.
+    return {"user": user_out(row), "key": await _new_key(g, str(row["id"]), "first key"), "temporary_password": temp}
+
+
+@router.post("/users/{user_id}/reset-password")
+async def reset_password(user_id: str, request: Request, _: AuthUser = Depends(admin_user)):
+    g = gw(request)
+    temp = generate_temp_password()
+    pw_hash = await asyncio.to_thread(hash_password, temp)
+    row = await g.db.fetchrow("UPDATE users SET password_hash=$2 WHERE id=$1::uuid RETURNING id", user_id, pw_hash)
+    if row is None:
+        raise HTTPException(404, "user not found")
+    await g.db.execute("DELETE FROM sessions WHERE user_id=$1::uuid", user_id)   # sign them out everywhere
+    return {"temporary_password": temp}
 
 
 @router.patch("/users/{user_id}")
@@ -274,7 +379,7 @@ async def tools(request: Request, _: AuthUser = Depends(current_user)):
 def audit_out(r) -> dict:
     return {"id": r["id"], "ts": r["ts"], "user_email": r["user_email"], "server": r["server_slug"],
             "tool": r["tool_name"], "requested_name": r["requested_name"], "duration_ms": r["duration_ms"],
-            "outcome": r["outcome"], "detail": r["detail"]}
+            "outcome": r["outcome"], "detail": r["detail"], "source": r["source"]}
 
 
 @router.get("/audit")

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .db import Database
-from .security import key_matches, parse_key_prefix
+from .security import hash_session_token, key_matches, parse_key_prefix
 
 
 @dataclass(frozen=True)
@@ -14,6 +14,7 @@ class AuthUser:
     role: str
     key_id: str
     key_prefix: str
+    via: str = "key"          # "key" (API key) or "session" (dashboard login)
 
     @property
     def is_admin(self) -> bool:
@@ -44,3 +45,17 @@ def bearer_token(authorization: str | None) -> str | None:
         return None
     scheme, _, value = authorization.partition(" ")
     return value.strip() if scheme.lower() == "bearer" and value.strip() else None
+
+
+async def authenticate_session(db: Database, cookie: str | None) -> AuthUser | None:
+    """Resolve a dashboard session cookie. The database is checked every time, so logging out,
+    disabling a user or resetting their password takes effect immediately."""
+    if not cookie:
+        return None
+    row = await db.fetchrow(
+        """SELECT s.id AS session_id, u.id AS user_id, u.email, u.role, u.disabled
+           FROM sessions s JOIN users u ON u.id = s.user_id
+           WHERE s.token_hash = $1 AND s.expires_at > now()""", hash_session_token(cookie))
+    if row is None or row["disabled"]:
+        return None
+    return AuthUser(str(row["user_id"]), row["email"], row["role"], str(row["session_id"]), "session", via="session")

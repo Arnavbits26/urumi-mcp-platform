@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import ipaddress
+import os
 import re
 import secrets
 from urllib.parse import urlparse
@@ -97,3 +99,41 @@ async def validate_upstream_url(url: str, allow_loopback: bool = False) -> None:
             raise ValueError("loopback addresses are not allowed")
         if addr.is_link_local or addr.is_unspecified or addr.is_multicast or addr.is_reserved:
             raise ValueError("address range is not allowed (link-local, metadata, multicast or reserved)")
+
+
+# ---- Passwords (dashboard login) and sessions ----------------------------------------------
+# scrypt is deliberately slow and memory-hungry, so guessing a stolen hash is expensive. Unlike API
+# keys, passwords are chosen by humans and are low-entropy, so they need this.
+
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1, dklen=32)
+    return "scrypt$" + base64.b64encode(salt).decode() + "$" + base64.b64encode(digest).decode()
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    try:
+        scheme, salt_b64, digest_b64 = (stored or "").split("$")
+        if scheme != "scrypt":
+            return False
+        digest = hashlib.scrypt(password.encode(), salt=base64.b64decode(salt_b64), n=2**14, r=8, p=1, dklen=32)
+        return hmac.compare_digest(digest, base64.b64decode(digest_b64))
+    except Exception:
+        return False
+
+
+# Compared when the email is unknown, so response time does not reveal which emails exist.
+DUMMY_PASSWORD_HASH = hash_password("not-a-real-password")
+
+
+def generate_temp_password() -> str:
+    return secrets.token_urlsafe(9)
+
+
+def generate_session_token() -> tuple[str, str]:
+    token = secrets.token_urlsafe(32)
+    return token, hash_session_token(token)
+
+
+def hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()

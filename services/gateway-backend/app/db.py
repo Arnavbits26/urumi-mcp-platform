@@ -56,6 +56,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
   detail text
 );
 CREATE INDEX IF NOT EXISTS audit_log_ts ON audit_log (ts DESC);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'mcp';
+CREATE TABLE IF NOT EXISTS sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash text UNIQUE NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  last_seen_at timestamptz
+);
 """
 
 

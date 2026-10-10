@@ -31,6 +31,9 @@ class Settings:
         self.database_url = url
         self.encryption_key = _req("ENCRYPTION_KEY")            # Fernet key, encrypts upstream credentials
         self.bootstrap_admin_key = os.environ.get("BOOTSTRAP_ADMIN_KEY", "").strip()
+        self.bootstrap_admin_password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "").strip()
+        self.cookie_secure = _bool("COOKIE_SECURE", False)       # true when the dashboard is served over https
+        self.session_hours = int(os.environ.get("SESSION_HOURS", "12"))
         self.bootstrap_admin_email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
         self.seed_servers: list[dict] = json.loads(os.environ.get("SEED_SERVERS", "[]") or "[]")
         self.call_timeout = float(os.environ.get("CALL_TIMEOUT_SECONDS", "30"))
@@ -39,5 +42,13 @@ class Settings:
         self.refresh_interval = float(os.environ.get("REFRESH_INTERVAL_SECONDS", "15"))
         self.fail_threshold = int(os.environ.get("FAIL_THRESHOLD", "2"))
         self.allow_loopback_upstreams = _bool("UPSTREAM_ALLOW_LOOPBACK", False)  # tests / local dev only
+        # Chat assistant: any OpenAI-compatible service. The key comes from a Kubernetes Secret.
+        self.llm_api_key = os.environ.get("LLM_API_KEY", "").strip()
+        self.llm_base_url = os.environ.get("LLM_BASE_URL", "https://api.groq.com/openai/v1").strip()
+        self.llm_model = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile").strip()
+        self.llm_timeout = float(os.environ.get("LLM_TIMEOUT_SECONDS", "60"))
+        self.chat_max_steps = int(os.environ.get("CHAT_MAX_STEPS", "6"))
+        self.chat_timeout = float(os.environ.get("CHAT_TIMEOUT_SECONDS", "120"))
+        self.chat_rate_per_minute = int(os.environ.get("CHAT_RATE_PER_MINUTE", "12"))
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8080"))

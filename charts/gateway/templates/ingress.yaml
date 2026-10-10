@@ -21,11 +21,27 @@ spec:
     - host: {{ .Values.host }}
       http:
         paths:
-          - path: /
+          # The API and the MCP endpoint go to the gateway; everything else is the dashboard.
+          # Traefik and nginx both pick the longest matching prefix.
+          - path: /api
             pathType: Prefix
             backend:
               service:
                 name: gateway-backend
+                port:
+                  name: http
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway-backend
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dashboard
                 port:
                   name: http
 {{- end }}
