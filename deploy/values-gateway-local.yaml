@@ -2,3 +2,5 @@
 host: gateway.localtest.me
 ingress:
   className: traefik
+llm:
+  model: openai/gpt-oss-120b
