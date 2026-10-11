@@ -1,0 +1,21 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.name }}-gateway-only
+  labels:
+    {{- include "demo-mcp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    {{- if .Values.networkPolicy.allowFrom }}
+    - from:
+        {{- toYaml .Values.networkPolicy.allowFrom | nindent 8 }}
+      ports:
+        - port: {{ .Values.port }}
+          protocol: TCP
+    {{- end }}
+{{- end }}

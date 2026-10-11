@@ -1,0 +1,21 @@
+# The notes MCP server. The gateway signs in with a bearer token.
+name: mcp-notes
+image:
+  repository: urumi/mcp-notes
+secret:
+  name: notes-credentials
+  key: token
+  env: AUTH_TOKEN
+env:
+  NOTES_DB: /data/notes.db
+persistence:
+  enabled: true
+  size: 1Gi
+networkPolicy:
+  allowFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: gateway-backend

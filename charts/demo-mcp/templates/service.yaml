@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels:
+    {{- include "demo-mcp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP            # no Ingress anywhere: only other pods can reach it
+  selector:
+    app.kubernetes.io/name: {{ .Values.name }}
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: http
