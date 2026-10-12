@@ -308,8 +308,11 @@ async def invite_user(body: UserIn, request: Request, _: AuthUser = Depends(admi
 
 
 @router.post("/users/{user_id}/reset-password")
-async def reset_password(user_id: str, request: Request, _: AuthUser = Depends(admin_user)):
+async def reset_password(user_id: str, request: Request, admin: AuthUser = Depends(admin_user)):
     g = gw(request)
+    if user_id == admin.id:
+        # A reset signs the person out everywhere, so doing it to yourself loses the new password with the session.
+        raise HTTPException(400, "To change your own password use API keys, then Change your password.")
     temp = generate_temp_password()
     pw_hash = await asyncio.to_thread(hash_password, temp)
     row = await g.db.fetchrow("UPDATE users SET password_hash=$2 WHERE id=$1::uuid RETURNING id", user_id, pw_hash)

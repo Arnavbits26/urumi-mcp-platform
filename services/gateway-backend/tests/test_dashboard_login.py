@@ -115,6 +115,10 @@ async def main():
     check("admin resets a password", r.status_code == 200 and new_temp != temp)
     check("reset signs the user out everywhere", (await bob4.get("/api/me")).status_code == 401)
     check("reset password works", (await login("bob@example.com", new_temp))[1].status_code == 200)
+    me_id = (await admin.get("/api/me")).json()["id"]
+    r = await admin.post(f"/api/users/{me_id}/reset-password", headers=CSRF)
+    check("admin cannot reset their OWN password (it would sign them out)", r.status_code == 400 and "Change your password" in r.json()["detail"], r.text[:90])
+    check("...and their session is still alive", (await admin.get("/api/me")).status_code == 200)
     check("admin cannot disable or demote themself", (await admin.patch(f"/api/users/{(await admin.get('/api/me')).json()['id']}", json={"disabled": True}, headers=CSRF)).status_code == 400)
 
     # ---- throttling ---------------------------------------------------------------------------

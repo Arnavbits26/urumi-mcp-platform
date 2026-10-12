@@ -217,9 +217,11 @@ export default function Team({ me }) {
                   <button type="button" className="btn btn-quiet" aria-expanded={open === u.id} onClick={() => setOpen(open === u.id ? null : u.id)}>
                     {open === u.id ? 'Hide keys' : 'Keys'}
                   </button>
-                  <button type="button" className="btn btn-quiet" onClick={() => setDialog({ mode: 'reset', user: u })}>
-                    Reset password
-                  </button>
+                  {u.id !== me.id && (
+                    <button type="button" className="btn btn-quiet" onClick={() => setDialog({ mode: 'reset', user: u })}>
+                      Reset password
+                    </button>
+                  )}
                   {u.id !== me.id && (
                     <button type="button" className="btn btn-quiet" onClick={() => update(u, { disabled: !u.disabled })}>
                       {u.disabled ? 'Enable' : 'Disable'}

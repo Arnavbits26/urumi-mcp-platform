@@ -194,6 +194,18 @@ describe('team', () => {
   })
 })
 
+describe('team: own row', () => {
+  it('offers Reset password for other people but not for yourself', async () => {
+    fakeGateway({ 'GET /api/me': [200, ADMIN], 'GET /api/users': [200, [ADMIN, MEMBER]] })
+    window.location.hash = '#/team'
+    render(<App />)
+    const mine = (await screen.findByText('admin@example.com')).closest('li')
+    const theirs = (await screen.findByText('bob@example.com')).closest('li')
+    expect(within(mine).queryByRole('button', { name: 'Reset password' })).toBeNull()
+    expect(within(theirs).getByRole('button', { name: 'Reset password' })).toBeInTheDocument()
+  })
+})
+
 describe('audit log', () => {
   const ROWS = [
     { id: 2, ts: new Date().toISOString(), user_email: 'bob@example.com', server: 'alpha', tool: 'slow', requested_name: 'alpha__slow', duration_ms: 2001, outcome: 'timeout', detail: "'alpha' did not answer within 2s" },

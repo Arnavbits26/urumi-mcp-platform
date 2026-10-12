@@ -47,4 +47,26 @@ wp option update woocommerce_cod_settings '{"enabled":"yes","title":"Cash on del
 wp eval 'WC_Install::create_pages();'
 wp eval '$z = new WC_Shipping_Zone(0); if (!count($z->get_shipping_methods())) { $z->add_shipping_method("free_shipping"); echo "added free shipping\n"; }'
 
+echo "[setup] finishing the WooCommerce install, then applying store defaults"
+# A fresh WooCommerce puts the shop in "Coming soon" mode (hidden from visitors) and picks its own currency.
+# Run its install routine now, so nothing is left to happen on the first web request, and set our defaults AFTER it.
+wp eval 'if (class_exists("WC_Install")) { WC_Install::install(); echo "install routine done\n"; }' || echo "[setup] note: install routine reported an error (continuing)"
+wp option update woocommerce_coming_soon no
+wp option update woocommerce_store_pages_only no
+wp option update woocommerce_currency "$CURRENCY"
+
+# Safety net: a must-use plugin that always answers "not coming soon", whatever else changes the option later.
+# (Side effect, by design: the Live / Coming soon switch in wp-admin no longer has an effect on this store.)
+mkdir -p "$WP_PATH/wp-content/mu-plugins"
+cat > "$WP_PATH/wp-content/mu-plugins/urumi-store-defaults.php" <<'PHP'
+<?php
+/**
+ * Plugin Name: Urumi store defaults
+ * Description: Keeps the demo store open to visitors (never in WooCommerce "Coming soon" mode).
+ */
+add_filter( 'pre_option_woocommerce_coming_soon', function () { return 'no'; } );
+PHP
+
+echo "[setup] coming_soon is now: $(wp eval 'echo get_option("woocommerce_coming_soon");')"
+echo "[setup] currency is now:    $(wp eval 'echo get_option("woocommerce_currency");')"
 echo "[setup] done"
