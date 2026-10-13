@@ -1,0 +1,22 @@
+# NOTES MCP server on a production-like server.
+name: mcp-notes
+image:
+  repository: urumi/mcp-notes
+secret:
+  name: notes-credentials
+  key: token
+  env: AUTH_TOKEN
+env:
+  NOTES_DB: /data/notes.db
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClass: local-path
+networkPolicy:
+  allowFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: gateway-backend

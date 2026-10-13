@@ -1,0 +1,10 @@
+# GATEWAY chart (backend + dashboard + PostgreSQL) on a production-like server.
+# `host` and the image tags are set by scripts/prod/deploy.sh.
+ingress:
+  className: traefik
+cookieSecure: false             # set to true as soon as the site is served over https
+persistence:
+  storageClass: local-path
+  size: 5Gi
+llm:
+  model: openai/gpt-oss-120b    # any model your AI service offers; the key lives in the llm-credentials Secret

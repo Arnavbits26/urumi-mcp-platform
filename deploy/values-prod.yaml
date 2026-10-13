@@ -1,12 +1,9 @@
-# Production-like k3s VPS. Fill in your real domain before using. No secrets belong here.
-siteUrl: https://store.example.com
-host: store.example.com
+# STORE chart on a production-like server (a VM or VPS running k3s).
+# The domain is NOT written here: scripts/prod/deploy.sh sets `host` and `siteUrl` from BASE_DOMAIN.
+# No secrets belong in this file; they are created in the cluster by scripts/*-secrets.sh.
 ingress:
-  className: traefik
-  tls:
-    enabled: true
-    secretName: store-tls     # created by cert-manager or manually
+  className: traefik            # k3s ships Traefik
 persistence:
-  storageClass: local-path    # k3s default; change for block storage
-  wordpress: { size: 10Gi }
-  mariadb:   { size: 10Gi }
+  storageClass: local-path      # k3s default. On a cloud, use its block-storage class instead.
+  wordpress: { size: 5Gi }
+  mariadb:   { size: 5Gi }

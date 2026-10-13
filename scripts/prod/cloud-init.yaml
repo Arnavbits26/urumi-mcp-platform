@@ -1,0 +1,8 @@
+#cloud-config
+# Turns a fresh Ubuntu machine into a single-node Kubernetes server (k3s). The same step works on a VPS.
+package_update: true
+packages:
+  - curl
+runcmd:
+  # --write-kubeconfig-mode 644 lets us read the kubeconfig without sudo when we copy it out.
+  - curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644" sh -

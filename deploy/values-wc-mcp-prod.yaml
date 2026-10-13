@@ -1,0 +1,12 @@
+# WOOCOMMERCE MCP SERVER on a production-like server. Image tag is set by scripts/prod/deploy.sh (VERSION).
+image:
+  pullPolicy: IfNotPresent      # images are imported into the server, or pulled from a registry
+networkPolicy:                  # only the gateway pods may connect
+  enabled: true
+  allowFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: gateway-backend

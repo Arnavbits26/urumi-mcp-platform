@@ -1,0 +1,16 @@
+# UTILS MCP server on a production-like server.
+name: mcp-utils
+image:
+  repository: urumi/mcp-utils
+secret:
+  name: utils-credentials
+  key: api-key
+  env: API_KEY
+networkPolicy:
+  allowFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: gateway
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: gateway-backend
