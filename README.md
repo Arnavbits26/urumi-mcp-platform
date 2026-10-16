@@ -10,6 +10,7 @@ never leave the gateway.
 - Threat model: [`docs/threat-model.md`](docs/threat-model.md)
 - Demo script for the definition of done: [`docs/demo-runbook.md`](docs/demo-runbook.md)
 - Using the gateway from an external client: [`docs/external-client.md`](docs/external-client.md)
+- Production-like deployment on a k3s VM or VPS, with upgrade and rollback: [`docs/deploy-production.md`](docs/deploy-production.md)
 - Design decisions, one page each: [`docs/decisions/`](docs/decisions/)
 
 ## What is in the repository
@@ -106,6 +107,21 @@ product called Mug priced at 299". Under each answer it lists the tools it used,
 calls are audited under your name, tagged "via chat". Uses the AI service from step 4 (Groq's free tier by default;
 the model is set in `deploy/values-gateway-local.yaml`).
 
+## Production-like deployment
+
+The same charts and scripts run on a fresh Ubuntu server with only values changed. On a Mac, a free Multipass VM
+works as the server (about 4 GB of memory is enough):
+
+```bash
+./scripts/prod/export-images.sh        # build and save versioned images (Docker open)
+./scripts/prod/vm-create.sh            # Ubuntu VM with k3s; prints two export lines to run
+./scripts/prod/import-images.sh
+./scripts/prod/deploy.sh               # all charts, secrets and registration
+```
+
+Full steps, the local-versus-production table, upgrade and rollback, and a real VPS variant:
+[`docs/deploy-production.md`](docs/deploy-production.md).
+
 ## Tests
 
 ```bash
@@ -133,11 +149,11 @@ upstreams, roles, hashed API keys, an audit log, and the dashboard chat with a t
 
 | Item | Status | Where |
 |---|---|---|
-| 1 Production-like VPS | in progress, not yet shown | `deploy/`, a guide is being written |
+| 1 Production-like VPS | done on a k3s VM, not public (a real VPS needs only DNS, an image import and TLS, all described) | `scripts/prod/`, `deploy/values-*-prod.yaml`, `docs/deploy-production.md`. Ran on a 4 GB Ubuntu VM at about 2.1 GB used. Public DNS and TLS were not exercised |
 | 6 Security hardening | partly | SSRF guard (`app/security.py`), encrypted credentials, non-root and read-only containers, NetworkPolicies on the three upstreams. Not done: default-deny everywhere, hardened database images |
 | 7 Scaling | design only | the backend keeps no per-client state, but several replicas are not demonstrated; the chat limiter and login throttle are per replica |
 | 8 Observability | audit log only | no metrics |
-| 9 Upgrades and rollback | Helm-native, to be written up | |
+| 9 Upgrades and rollback | documented with commands, including a failed upgrade that Helm undoes by itself | `docs/deploy-production.md`, section 7 |
 | 2, 3, 4, 5, bonus multi-store | not attempted | |
 
 ## Honest limits

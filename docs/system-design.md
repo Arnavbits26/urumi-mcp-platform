@@ -111,7 +111,8 @@ edits. (A caveat: inside the cluster that name also resolves to 127.0.0.1, which
 
 ## What changes for production
 
-Same charts, different values (see `docs/deploy-production.md` once added):
+Same charts, different values. This was run for real on a 4 GB Ubuntu VM running k3s (about 2.1 GB in use); the steps are in
+[`deploy-production.md`](deploy-production.md):
 
 - **DNS and ingress.** Real or `nip.io` host names instead of `*.localtest.me`, ports 80/443 instead of 8080,
   `siteUrl` without a port, TLS via cert-manager (`cookieSecure: true` once the site is https).

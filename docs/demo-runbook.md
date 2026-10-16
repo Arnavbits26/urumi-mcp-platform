@@ -30,6 +30,14 @@ Use two browser windows (one private) so both stay signed in.
     Utilities keep answering. Restore with `kubectl -n mcp scale deployment/mcp-notes --replicas=1`.
 13. Audit log: every call above, attributed to the right person, chat calls marked "via chat".
 
+## 5. Production-like run (on the k3s VM)
+Follow `docs/deploy-production.md`. In every terminal, first: `export KUBECONFIG=...` and `export BASE_DOMAIN=...`.
+14. Show the cluster: `kubectl get pods -A`, `kubectl top nodes`, `kubectl get ingress -A`, `kubectl get networkpolicy -A`.
+15. Repeat steps 3 to 9 against `http://gateway.$BASE_DOMAIN` (use `URUMI_URL=http://gateway.$BASE_DOMAIN/mcp` for the script).
+16. Prove the network lock: a pod in another namespace cannot reach the notes server:
+    `kubectl run nettest -n default --rm -it --restart=Never --image=curlimages/curl -- curl -m 5 http://mcp-notes.mcp.svc.cluster.local:8000/healthz`
+17. Upgrade and rollback: the guarded failed upgrade in section 7 of the guide, then `helm history gateway -n gateway`.
+
 ## Kubernetes tour for the video
     kubectl get ns
     kubectl get pods -A

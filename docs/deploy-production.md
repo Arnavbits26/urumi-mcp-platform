@@ -95,8 +95,14 @@ A normal upgrade is a new image version: `VERSION=0.8.1 ./scripts/prod/export-im
 To show a **safe failure**, upgrade to an image that does not exist. `--atomic` makes Helm undo the upgrade itself:
 
 ```bash
-helm upgrade gateway charts/gateway -n gateway -f deploy/values-gateway-prod.yaml \
-  --set host=gateway.$BASE_DOMAIN --set image.tag=0.0.0-bad --set dashboard.image.tag=0.8.0 --atomic --timeout 2m
+# Stops by itself if BASE_DOMAIN is empty in this terminal tab (an empty value would change the site's address).
+if [ -z "$BASE_DOMAIN" ]; then
+  echo "STOP: BASE_DOMAIN is empty. Run the export line first."
+else
+  helm upgrade gateway charts/gateway -n gateway -f deploy/values-gateway-prod.yaml \
+    --set host=gateway.$BASE_DOMAIN --set image.tag=0.0.0-bad --set dashboard.image.tag=0.8.0 \
+    --atomic --timeout 2m
+fi
 kubectl -n gateway get pods          # the old pod kept serving the whole time
 helm history gateway -n gateway      # the failed revision, then the automatic rollback
 ```
@@ -117,6 +123,19 @@ Or roll back by hand to any revision: `helm rollback gateway 1 -n gateway`.
    `ClusterIssuer`, enable `ingress.tls` in the store and gateway values with the issuer annotation, and set
    `cookieSecure: true` and an `https://` `siteUrl`.
 
+## Tips from the first real run
+
+- **Every terminal tab needs the two `export` lines** (`KUBECONFIG` and `BASE_DOMAIN`). A new tab has neither, and a
+  `helm upgrade` run without `BASE_DOMAIN` would change the gateway's address to `gateway.`.
+- **Chrome says `ERR_ADDRESS_UNREACHABLE` although `curl` works.** macOS blocks apps from the local network until you allow
+  them: System Settings, Privacy & Security, Local Network, switch your browser on, then quit and reopen it.
+- **The chat says the AI service rejected the API key.** The new cluster starts with no key; if the pasted one was wrong,
+  create a new one at your AI service and run `./scripts/llm-secret.sh` (it restarts the gateway).
+- **A page can answer 404 for a few seconds during an upgrade** while the ingress is updated. Wait and reload.
+- **The VM pauses when the Mac sleeps.** Keep it awake while working, and use `multipass list` and `multipass start urumi-prod` if it stopped.
+- **On an 8 GB Mac, keep Docker Desktop closed while the VM runs.** To go back to the local setup:
+  `multipass stop urumi-prod`, open Docker Desktop, `k3d cluster start urumi`, and use a new terminal tab without the `export` lines.
+
 ## Troubleshooting
 
 | Symptom | Likely cause and fix |
@@ -126,6 +145,9 @@ Or roll back by hand to any revision: `helm rollback gateway 1 -n gateway`.
 | The `.nip.io` names do not resolve | nip.io is down or blocked. Add `<ip> store.<ip>.nip.io gateway.<ip>.nip.io` to `/etc/hosts`. |
 | The VM's address changed after a reboot | Re-run `vm-create.sh`, export the new `BASE_DOMAIN`, then `deploy.sh` again. |
 | `deploy.sh` says it refuses to run | Your terminal still points at the local cluster: run the two `export` lines. |
+| Chrome: `ERR_ADDRESS_UNREACHABLE` | Allow your browser under System Settings, Privacy & Security, Local Network, then restart it. |
+| Chat: "The AI service rejected the API key" | Run `./scripts/llm-secret.sh` with a valid key. |
+| A page shows 404 right after an upgrade | Normal for a few seconds. If it lasts, run `kubectl -n gateway get ingress` and check the host is `gateway.<BASE_DOMAIN>`. |
 
 ## Removing it
 
