@@ -1,44 +1,76 @@
-# urumi-mcp-platform
+# Urumi MCP Platform
 
-WooCommerce hosting with a team MCP gateway on Kubernetes (Urumi AI FDE internship, round 1).
+**WooCommerce hosting with a team MCP gateway, on Kubernetes.** Built for the Urumi AI FDE internship, round 1.
 
-An admin connects MCP servers once in a dashboard. Every team member then reaches all of them through one MCP
-endpoint, from an AI client such as Claude Code, or through a chat page in the dashboard. Upstream credentials
-never leave the gateway.
+An admin connects MCP servers once, in a dashboard. Every team member then uses all of them through **one MCP
+endpoint**, from an AI client such as Claude Code, or through a **chat page** in the dashboard. Upstream credentials
+never leave the gateway, and every tool call is written to an audit log under the person who made it.
 
-- Architecture, tradeoffs and failure handling: [`docs/system-design.md`](docs/system-design.md)
-- Threat model: [`docs/threat-model.md`](docs/threat-model.md)
-- Demo script for the definition of done: [`docs/demo-runbook.md`](docs/demo-runbook.md)
-- Using the gateway from an external client: [`docs/external-client.md`](docs/external-client.md)
-- Production-like deployment on a k3s VM or VPS, with upgrade and rollback: [`docs/deploy-production.md`](docs/deploy-production.md)
-- Design decisions, one page each: [`docs/decisions/`](docs/decisions/)
+```
+  browser ------------+
+                      |
+  MCP client ---------+--> Ingress (Traefik) --+--> dashboard (React + nginx)
+  /mcp + personal key                          |
+                                               +--> gateway-backend ---------> PostgreSQL
+                                               |    API, /mcp, chat agent,     users, hashed keys, sessions,
+                                               |    permissions, audit         servers, audit log
+                                               |        |
+                                               |        | signs in to each server with its own credential
+                                               |        |
+                                               |    +---+----------------+------------------+
+                                               |    v                    v                  v
+                                               |  wc-mcp (my server)   mcp-notes          mcp-utils
+                                               |    |                  (internal only: ClusterIP + NetworkPolicy)
+                                               |    v
+                                               +--> WordPress + WooCommerce ---> MariaDB   (the public storefront)
+```
 
-## What is in the repository
+Everything runs in the cluster and installs with Helm. The **same charts** run on a laptop (k3d) and on a k3s
+server; only the values files change.
 
-| Path | What |
+## Contents
+
+1. [Run it locally](#1-run-it-locally)
+2. [Use it: place an order, chat, connect an MCP client](#2-use-it-place-an-order-chat-connect-an-mcp-client)
+3. [Production-like deployment (k3s)](#3-production-like-deployment-k3s)
+4. [System design and tradeoffs](#4-system-design-and-tradeoffs)
+5. [Threat model](#5-threat-model)
+6. [Bonus and stand-out items](#6-bonus-and-stand-out-items)
+7. [Tests](#7-tests)
+8. [Repository layout](#8-repository-layout)
+9. [Known limits and troubleshooting](#9-known-limits-and-troubleshooting)
+
+### Where to find each deliverable
+
+| Deliverable | Where |
 |---|---|
-| `charts/store` | WordPress + WooCommerce + MariaDB, volumes, ingress, automatic WooCommerce setup |
-| `charts/wc-mcp` | MCP server for the store (my own code, Streamable HTTP, internal only) |
-| `charts/gateway` | Gateway backend, dashboard, PostgreSQL, ingress |
-| `charts/demo-mcp` | One chart used twice, for the notes and utils servers |
-| `services/` | Source: `wc-mcp-server`, `gateway-backend`, `dashboard`, `mcp-notes`, `mcp-utils` |
-| `deploy/` | Values files (`values-local.yaml` for the store, `values-gateway-local.yaml`, and so on) |
-| `scripts/` | Cluster and secret helpers, image builds, the external client |
+| README: local setup, production-like setup, placing an order, connecting a client, using the chat | this file, sections 1 to 3 |
+| Source: dashboard | [`services/dashboard/`](services/dashboard/) |
+| Source: backend and gateway | [`services/gateway-backend/app/`](services/gateway-backend/app/) (`api.py`, `mcp_gateway.py`, `toolservice.py`, `registry.py`, `security.py`) |
+| Source: WooCommerce MCP server | [`services/wc-mcp-server/app/`](services/wc-mcp-server/app/) |
+| Source: chat agent | [`services/gateway-backend/app/chat.py`](services/gateway-backend/app/chat.py) and [`llm.py`](services/gateway-backend/app/llm.py) |
+| Helm charts and values (local and production) | [`charts/`](charts/) and [`deploy/`](deploy/) (`values-*-local.yaml`, `values-*-prod.yaml`) |
+| System design and tradeoffs | [`docs/system-design.md`](docs/system-design.md), summarised in section 4 |
+| Threat model | [`docs/threat-model.md`](docs/threat-model.md), summarised in section 5 |
+| Bonus and stand-out items, and where to find them | section 6 |
+| Demo script for the definition of done | [`docs/demo-runbook.md`](docs/demo-runbook.md) |
 
-## Prerequisites (macOS or Linux)
+---
 
-Docker (4 CPUs and 6 GB or more for Docker Desktop), `k3d`, `kubectl`, `helm`, `openssl`, and Python 3.10+ for
-the tests and the external client. A free AI key from Groq (console.groq.com) is needed only for the chat.
+## 1. Run it locally
 
-## Local setup
+**Prerequisites** (macOS or Linux): Docker (Docker Desktop with 4 CPUs and 6 GB or more), `k3d`, `kubectl`, `helm`,
+`openssl`, and Python 3.10+ for the tests and the standalone client. A free AI key from
+[Groq](https://console.groq.com) is needed only for the chat; everything else works without it.
 
-Run from the repository root, in this order. Each step is safe to repeat.
+Run these from the repository root, in this order. Every step is safe to repeat. The first run is slow (image builds
+and the WordPress install are the long parts).
 
 ```bash
 # 1. Cluster. Creates the k3d cluster "urumi"; the host's port 8080 goes to the ingress.
 ./scripts/k3d-up.sh
 
-# 2. The store (takes a few minutes: it installs WordPress and WooCommerce)
+# 2. The store (installs WordPress and WooCommerce, so it takes a few minutes)
 ./scripts/store-secrets.sh
 helm upgrade --install store charts/store -n store -f deploy/values-local.yaml --wait --timeout 10m
 
@@ -58,7 +90,7 @@ helm upgrade --install gateway charts/gateway -n gateway -f deploy/values-gatewa
 # 5. Lock the WooCommerce MCP server so only the gateway pods can reach it
 helm upgrade wc-mcp charts/wc-mcp -n store -f deploy/values-wc-mcp-netpol.yaml --wait --timeout 3m
 
-# 6. Two more MCP servers (notes, utils), then register them in the gateway
+# 6. Two more MCP servers (notes and utils), then register them in the gateway
 ./scripts/build-demo-mcp.sh
 ./scripts/mcp-demo-secrets.sh
 helm upgrade --install mcp-notes charts/demo-mcp -n mcp -f deploy/values-mcp-notes.yaml --wait --timeout 3m
@@ -66,8 +98,11 @@ helm upgrade --install mcp-utils charts/demo-mcp -n mcp -f deploy/values-mcp-uti
 ./scripts/register-demo-servers.sh
 ```
 
-**Local domains.** `*.localtest.me` resolves to 127.0.0.1 through public DNS, and k3d forwards port 8080 to the
-ingress, so no `/etc/hosts` edits are needed.
+**Check it worked:** `kubectl get pods -A` shows every pod `Running`, and the dashboard's **Servers** page shows
+three servers (`woocommerce`, `notes`, `utils`) as **Connected**.
+
+**Local domains.** `*.localtest.me` resolves to 127.0.0.1 through public DNS, and k3d forwards host port 8080 to the
+cluster's ingress, so no `/etc/hosts` edits are needed.
 
 | What | Address |
 |---|---|
@@ -76,53 +111,188 @@ ingress, so no `/etc/hosts` edits are needed.
 | Dashboard | http://gateway.localtest.me:8080 (sign in as `admin@example.com`) |
 | MCP endpoint | http://gateway.localtest.me:8080/mcp |
 
-Passwords are random and live in Kubernetes Secrets. Print them when you need them:
+**Passwords** are random and live only in Kubernetes Secrets. Print them when you need them:
 
 ```bash
 kubectl -n store   get secret store-secrets   -o jsonpath='{.data.wp-admin-password}' | base64 -d; echo
 kubectl -n gateway get secret gateway-secrets -o jsonpath='{.data.bootstrap-admin-password}' | base64 -d; echo
 ```
 
-## Place an order
+---
 
-1. Open the storefront, add a product to the cart, check out with **Cash on delivery**.
-2. In WordPress admin open WooCommerce, then Orders. The order is listed. (No products yet? Products, Add New, or ask the chat to create one.)
+## 2. Use it: place an order, chat, connect an MCP client
 
-## Connect an external MCP client
+### Place an order
 
-Sign in to the dashboard, open **API keys** and create your own key. Then, for Claude Code:
+1. Open the storefront at http://store.localtest.me:8080 and add a product to the cart. (No products yet? In the
+   WordPress admin choose Products, Add New, or ask the chat to create one.)
+2. Check out with **Cash on delivery**.
+3. In the WordPress admin open **WooCommerce, then Orders**. The order is listed.
+
+### Use the chat agent
+
+Sign in to the dashboard and open **Chat**. Ask, for example, *"What orders came in during the last 7 days?"* or
+*"Create a product called Mug priced at 299"*. Under each answer the chat lists the tools it used, with their
+arguments and results. The agent acts **as you**: its calls go through the same gateway code as an external client's
+and appear in the **Audit log** under your name, tagged "via chat". It uses any OpenAI-compatible AI service (Groq's
+free tier by default; the model is set in `deploy/values-gateway-local.yaml`, the key in a Secret).
+
+### Connect an external MCP client
+
+1. In the dashboard open **API keys** and create your own key. It is shown once.
+2. Add the gateway to your client. For Claude Code:
+
+   ```bash
+   claude mcp add --transport http urumi http://gateway.localtest.me:8080/mcp \
+     --header "Authorization: Bearer YOUR_KEY"
+   claude mcp list        # shows urumi as connected
+   ```
+
+3. Start the client. You see the tools of **every enabled server**, named `woocommerce__...`, `notes__...` and
+   `utils__...`, without configuring any of the servers yourself. Disabling a server removes its tools.
+
+Cursor, MCP Inspector and a free standalone script that needs no paid account are covered in
+[`docs/external-client.md`](docs/external-client.md).
+
+### Invite a teammate (admins)
+
+On the **Team** page an admin invites a person, who then creates their own API key. Members use the tools but never
+see any upstream credential. An admin can revoke a key at any time, and the next call with it is rejected.
+
+### The whole demo flow
+
+[`docs/demo-runbook.md`](docs/demo-runbook.md) walks through the assignment's definition of done with two users:
+checkout, the chat creating a product and reporting an order, an external client as a second user, then revoking a
+key, disabling a server and killing a pod.
+
+---
+
+## 3. Production-like deployment (k3s)
+
+The same charts and scripts run on a fresh Ubuntu server with **only values changed**. On a Mac, a free Multipass VM
+acts as the server (about 4 GB of memory is enough). On a real VPS the steps are the same; see the guide.
 
 ```bash
-claude mcp add --transport http urumi http://gateway.localtest.me:8080/mcp --header "Authorization: Bearer YOUR_KEY"
-```
-
-Other options (MCP Inspector, Cursor, and a free standalone script that needs no paid account) are in
-[`docs/external-client.md`](docs/external-client.md). You see the tools of every enabled server, named
-`woocommerce__...`, `notes__...`, `utils__...`.
-
-## Use the chat agent
-
-Open **Chat** in the dashboard and ask, for example, "What orders came in during the last 7 days?" or "Create a
-product called Mug priced at 299". Under each answer it lists the tools it used, with arguments and results. Its
-calls are audited under your name, tagged "via chat". Uses the AI service from step 4 (Groq's free tier by default;
-the model is set in `deploy/values-gateway-local.yaml`).
-
-## Production-like deployment
-
-The same charts and scripts run on a fresh Ubuntu server with only values changed. On a Mac, a free Multipass VM
-works as the server (about 4 GB of memory is enough):
-
-```bash
-./scripts/prod/export-images.sh        # build and save versioned images (Docker open)
-./scripts/prod/vm-create.sh            # Ubuntu VM with k3s; prints two export lines to run
+./scripts/prod/export-images.sh   # build and save versioned images (Docker open)
+./scripts/prod/vm-create.sh       # Ubuntu VM with k3s; prints two export lines to run
 ./scripts/prod/import-images.sh
-./scripts/prod/deploy.sh               # all charts, secrets and registration
+./scripts/prod/deploy.sh          # all charts, secrets and server registration
 ```
 
-Full steps, the local-versus-production table, upgrade and rollback, and a real VPS variant:
-[`docs/deploy-production.md`](docs/deploy-production.md).
+**What changes between local and production** (the charts do not):
 
-## Tests
+| | Local (k3d) | Production-like (k3s on a VM or VPS) |
+|---|---|---|
+| Domain | `*.localtest.me:8080` | `store.<ip>.nip.io` and `gateway.<ip>.nip.io` on port 80, or a real domain |
+| Ingress | k3d forwards 8080 to Traefik | Traefik on ports 80 and 443; TLS with cert-manager on a real domain (documented, not exercised) |
+| Values files | `deploy/values-local.yaml`, `values-gateway-local.yaml` | `deploy/values-prod.yaml`, `values-gateway-prod.yaml`, `values-wc-mcp-prod.yaml`, `values-mcp-*-prod.yaml` |
+| Host name set by | the values file | `scripts/prod/deploy.sh` (`--set host=...` from `BASE_DOMAIN`) |
+| Images | `urumi/*:dev`, imported with `k3d image import` | `urumi/*:<VERSION>`, built once, saved to a file and imported (or pulled from a registry) |
+| Storage | k3d's `local-path` | k3s's `local-path`; on a cloud, its block-storage class |
+| Secrets | `scripts/*-secrets.sh` | the **same scripts**, run against the server, so secrets never travel through git |
+
+**Upgrade and roll back with Helm.** Each component is its own release with numbered revisions:
+
+```bash
+helm history gateway -n gateway          # list revisions
+helm rollback gateway 1 -n gateway       # return to a known-good revision (data volumes are kept)
+```
+
+`--atomic` makes Helm undo a bad upgrade by itself: upgrading to an image that does not exist leaves the old pod
+serving, then Helm rolls back. I ran exactly that; the commands and output are in
+[`docs/deploy-production.md`](docs/deploy-production.md) (section 7), which also covers the real-VPS variant and
+the memory plan.
+
+---
+
+## 4. System design and tradeoffs
+
+Full note: [`docs/system-design.md`](docs/system-design.md), with one-page decisions in
+[`docs/decisions/`](docs/decisions/).
+
+**Architecture choices.**
+
+- The gateway is an MCP **server** to clients and an MCP **client** to every upstream, so a person configures one URL
+  and one key, not one per server.
+- The store is reached through **WooCommerce's REST API**: authenticated and validated by WooCommerce itself. WP-CLI
+  would need exec access into the WordPress pod, and direct SQL would bypass WooCommerce's rules.
+- **PostgreSQL holds all gateway state** (users, hashed keys, sessions, encrypted server credentials, permissions,
+  audit log), so any gateway replica can serve any request.
+- The dashboard chat and external clients share **one `ToolService`**, so permissions, timeouts and the audit log
+  exist once.
+
+**How tool aggregation, routing and failure handling work.**
+
+- Every tool is exposed as `<server>__<tool>`. Server names cannot contain `__`, so the first `__` always splits
+  correctly, and two servers can both have a tool called `search`. The prefix is always applied, so a tool's name
+  never changes when another server is added.
+- `tools/list` is answered from a **cache** that a background loop refreshes every 15 s, checking each upstream
+  independently. A slow or dead upstream can never delay listing or another server's calls.
+- Each call opens a short MCP session to the one upstream it needs, with the gateway's own stored credential.
+  Timeouts: connect 5 s, call 30 s, refresh 10 s. A timeout is a clear tool error and an audit row.
+- An upstream becomes `unreachable` after 2 failed checks in a row, its tools disappear, and it reconnects by itself
+  when it returns. The dashboard shows the reason.
+
+**What changes for production.** DNS names and ingress ports instead of `localtest.me:8080`; a block-storage class
+and backups instead of `local-path`; secrets created on the server by the same scripts (sealed or external secrets
+for a team); versioned images from a registry instead of `dev`; TLS and `cookieSecure: true` on a real domain.
+
+---
+
+## 5. Threat model
+
+Full note: [`docs/threat-model.md`](docs/threat-model.md).
+
+**What a member can do with a credential they never see.** They cannot read it: it is encrypted in the database,
+never returned by any API, never logged, and sent only to the one server it belongs to. They can still *use* it
+indirectly, because any tool they may call runs with the full power of that shared credential (the WooCommerce key
+can create products and change order status). Limits: members cannot register or edit servers; every call is audited
+under their name; a leaked key is revoked at once; and an admin can **block tools per role** (section 6) so that, for
+example, members read orders but only admins change them. Nothing is blocked until an admin sets a rule.
+
+**Why client tokens are not passed through to upstreams.** A member's key is meant for the gateway only. Forwarding
+it would give a working key to every upstream, including a malicious one that could replay it against the gateway,
+and would make upstreams accept tokens never issued for them (a confused-deputy problem). The gateway ends the
+client's authentication itself and signs in to each upstream with a separate credential that only it holds, so an
+upstream never learns who the member is.
+
+**Untrusted upstreams: tool descriptions written to manipulate the model.** Only an admin can register a server.
+Descriptions are length-capped and prefixed with the server's name; the chat gives tool output to the model only as
+tool messages, never as user or system text, under a prompt that says results are data; tool calls, turns and output
+size are capped; timeouts are strict; and URLs are checked against SSRF rules when registered and again on every
+connection. **Residual risk:** a model can still be fooled into using a write tool the person is allowed to use, and
+tool definitions are not pinned, so a server could change a description later.
+
+**What one team member can do to another.** They cannot see each other's keys, audit rows, chat history or
+sessions. They *can* change shared data through shared tools (products, order statuses, notes), because upstreams
+cannot tell members apart; the audit log shows who did it. Admins can reset passwords and issue keys, so audit
+attribution trusts admins.
+
+---
+
+## 6. Bonus and stand-out items
+
+Details, commands and measurements for each item: [`docs/stand-out-features.md`](docs/stand-out-features.md).
+
+| # | Item | Status | Where |
+|---|---|---|---|
+| 1 | Production-like VPS deployment | **Done** on a k3s VM (not public). Values-only changes, documented. Public DNS and TLS not exercised | `scripts/prod/`, `deploy/values-*-prod.yaml`, [`docs/deploy-production.md`](docs/deploy-production.md) |
+| 2 | Tool permissions | **Done**, per role, default allow. Hidden from the tool list and rejected if called | [`docs/stand-out-features.md`](docs/stand-out-features.md#tool-permissions), `app/permissions.py`, the dashboard's Permissions page |
+| 3 | OAuth on the gateway | Not attempted | |
+| 4 | Handling many tools | **Done**: three tools (search, schema, run) at `/mcp/compact`, and a "Search first" mode in the chat | [`docs/stand-out-features.md`](docs/stand-out-features.md#handling-many-tools), `app/compact.py` |
+| 5 | Hosted MCP servers | Not attempted | |
+| 6 | Security hardening | **Partly**: SSRF guard, credentials encrypted at rest, non-root containers, NetworkPolicies on the three upstreams. Not done: default-deny everywhere, hardened database images | [`docs/stand-out-features.md`](docs/stand-out-features.md#security-hardening), `app/security.py` |
+| 7 | Scaling | **Done**: per-key rate limit, and the gateway runs as several replicas that share their counters. One node; PostgreSQL is one pod | [`docs/stand-out-features.md`](docs/stand-out-features.md#scaling), `app/ratelimit.py`, `app/shared.py` |
+| 8 | Observability | **Done, basic**: Prometheus `/metrics`, the audit log, and the reason an upstream is unreachable. No dashboards or alerts | [`docs/stand-out-features.md`](docs/stand-out-features.md#rate-limits-and-metrics), `app/metrics.py` |
+| 9 | Upgrades and rollback | **Done**: documented, including a real failed upgrade that Helm rolled back | [`docs/deploy-production.md`](docs/deploy-production.md), section 7 |
+| Bonus | Multi-store provisioning | **Not attempted.** How I would build it is sketched in [`docs/stand-out-features.md`](docs/stand-out-features.md#not-attempted-and-how-i-would-approach-them) | |
+
+---
+
+## 7. Tests
+
+The tests use a real PostgreSQL (from the `pgserver` package), real MCP servers and scripted AI responses. No cluster
+is needed.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -134,133 +304,42 @@ pip install -r services/gateway-backend/requirements.txt -r services/wc-mcp-serv
 (cd services/mcp-notes && python -m tests.test_server)
 (cd services/wc-mcp-server && python -m tests.test_end_to_end)
 (cd services/dashboard && npm ci && npm test)
+bash scripts/prod/test-deploy-dry-run.sh
 ```
 
-They use a real PostgreSQL (from the `pgserver` package), real MCP servers and scripted AI responses. No cluster.
+---
 
-## Requirements checklist
+## 8. Repository layout
 
-All mandatory items are implemented: Helm charts with local values, persistent storage for the store, ingress with
-stable URLs, probes and resource limits on every workload, secrets only in Kubernetes Secrets, my own WooCommerce
-MCP server (REST API, internal only), a gateway with name-collision handling and failure isolation, three
-upstreams, roles, hashed API keys, an audit log, and the dashboard chat with a tool loop.
-
-## Stand-out items
-
-| Item | Status | Where |
-|---|---|---|
-| 2 Tool permissions | done (v0.9.0), per role, default allow | `services/gateway-backend/app/permissions.py`, `toolservice.py`, the dashboard's Permissions page, `tests/test_permissions.py`. See "Tool permissions" below |
-| 1 Production-like VPS | done on a k3s VM, not public (a real VPS needs only DNS, an image import and TLS, all described) | `scripts/prod/`, `deploy/values-*-prod.yaml`, `docs/deploy-production.md`. Ran on a 4 GB Ubuntu VM at about 2.1 GB used. Public DNS and TLS were not exercised |
-| 6 Security hardening | partly | SSRF guard (`app/security.py`), encrypted credentials, non-root and read-only containers, NetworkPolicies on the three upstreams. Not done: default-deny everywhere, hardened database images |
-| 7 Scaling | done (v0.9.1, v0.9.3): a per-key rate limit, and the gateway runs as several replicas | `app/ratelimit.py`, `app/shared.py`, the chart's `replicaCount`, `tests/test_scaling.py`. See "Scaling" below |
-| 8 Observability | partly: Prometheus `/metrics` (v0.9.1) and the audit log | `app/metrics.py`. No dashboards or alerts on top of it |
-| 9 Upgrades and rollback | documented with commands, including a failed upgrade that Helm undoes by itself | `docs/deploy-production.md`, section 7 |
-| 4 Handling many tools | done (v0.9.2): search, schema, run | `app/compact.py`, the `/mcp/compact` endpoint, the chat's "Search first" mode, `tests/test_many_tools.py` (250 tools on 10 servers). See "Handling many tools" below |
-| 3, 5, bonus multi-store | not attempted | |
-
-## Tool permissions
-
-An admin controls which tools each role may use. **Everything is allowed until you block it**, so a fresh install
-behaves exactly as before. Rules are per role (`member` or `admin`). A rule names a server and a tool, or `*` for
-every tool of that server, and the most specific rule wins (tool, then server, then the default).
-
-A blocked tool is **hidden** from the tool list that external MCP clients and the dashboard chat see, and a direct
-call to it is **rejected** (audit outcome `rejected`, reason "not permitted for the member role"). The upstream
-server is never contacted. One check inside `ToolService` covers both the MCP endpoint and the chat.
-
-In the dashboard, open **Permissions** (admins only). Each server has a Members column and an Admins column, and
-**Make read-only for members** blocks that server's write-style tools (names starting with create, update, delete,
-add, and similar) after showing you the list. By API, with an admin key:
-
-```bash
-curl -s -X PUT http://gateway.localtest.me:8080/api/permissions \
-  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-  -d '{"changes":[{"role":"member","server":"woocommerce","tool":"create_product","allow":false},
-                  {"role":"member","server":"woocommerce","tool":"update_order_status","allow":false}]}'
-```
-
-`allow: true` or `false` sets a rule; `null` removes it. `GET /api/permissions` returns what each role may do and
-which rule decided it. Removing a server removes its rules.
-
-## Handling many tools
-
-Ten servers can offer hundreds of tools, too many to describe to a model on every request. The gateway offers the
-same catalogue through **three small tools**, at a second endpoint, `/mcp/compact` (the Ingress already sends it to the
-gateway, since it starts with `/mcp`):
-
-| Tool | What it does |
+| Path | What |
 |---|---|
-| `search_tools` | Find tools by what they do ("list invoices"). Returns the best matches with exact names and inputs. With no query it lists the servers. |
-| `get_tool_schema` | The full description and input schema of one tool |
-| `run_tool` | Run one tool by its exact name |
+| `charts/store` | WordPress, WooCommerce and MariaDB, volumes, ingress, and an idempotent WooCommerce setup job |
+| `charts/wc-mcp` | The WooCommerce MCP server (my own code, Streamable HTTP, internal only) |
+| `charts/gateway` | Gateway backend, dashboard, PostgreSQL, ingress |
+| `charts/demo-mcp` | One chart used twice, for the notes and utils servers |
+| `deploy/` | Values files for local and production |
+| `services/` | Source: `wc-mcp-server`, `gateway-backend`, `dashboard`, `mcp-notes`, `mcp-utils` |
+| `scripts/` | Cluster, secret and image helpers; `scripts/prod/` for the production-like deployment |
+| `docs/` | System design, threat model, production guide, demo runbook, external clients, stand-out features, decisions |
 
-Searching reads the cached tool list and contacts no upstream. **`run_tool` goes through the same `ToolService` as a
-direct call**, so permissions, the rate limit, timeouts, the audit log (under the real tool's name) and the metrics all
-apply, and a person can only find and run the tools their role may use.
+---
 
-The **dashboard chat** can use this too. Under the message box, **Tools given to the AI** has three choices: *Automatic*
-(search first once there are more than `chat.compactAbove` tools, default 30), *All tools*, and *Search first*. After a
-search-first answer the chat says how many tools the AI was offered ("3 of 250 tools"), and the tool list shows the tool
-that really ran. Set the default with the Helm values `chat.toolMode` and `chat.compactAbove`. To use it from Claude Code:
+## 9. Known limits and troubleshooting
 
-```bash
-claude mcp add --transport http urumi-compact http://gateway.localtest.me:8080/mcp/compact \
-  --header "Authorization: Bearer $NEWKEY"
-```
+**Limits, stated plainly** (the full prioritised list is at the end of the [threat model](docs/threat-model.md)):
 
-**Measured** (`tests/test_many_tools.py`: 250 tools on 10 servers, five kinds of thing per server with some names shared
-across servers): the three tools take 1.6 KB where the full list takes 114 KB (1.4%), and 15 of 15 plain-language
-questions put the right tool first. That catalogue and those questions were written by me, so real catalogues will be
-messier. The search is simple on purpose: weighted word matches on the tool name, server, inputs and description, with a
-few everyday verb synonyms (no model, no index to maintain).
+- Tool permissions are per role and **default-allow**: until an admin sets rules, any member can call any tool.
+- The production-like deployment ran on a local VM, not a public server, so public DNS and TLS were not exercised.
+- PostgreSQL is a single pod, so the gateway scales but the database does not. There are no backups.
+- NetworkPolicies protect the three upstreams but are not default-deny everywhere, and the databases and WordPress run
+  the vendors' default images.
+- Tool definitions are not pinned, so an upstream could change a description later.
 
-## Scaling
-
-The gateway keeps no per-client state, and MCP is stateless, so any replica can answer any request. Run more than one:
-
-```bash
-helm upgrade gateway charts/gateway -n gateway -f deploy/values-gateway-local.yaml \
-  --set replicaCount=2 --set settings.rateLimitStore=postgres --set settings.servedByHeader=true --wait --timeout 5m
-```
-
-What had to change to make that true (everything else was already in PostgreSQL: keys, sessions, permissions, the audit log):
-
-| State | Before | Now |
-|---|---|---|
-| Request limit, chat limit, login lock-out | counted in each process's memory, so two replicas would double every limit | with `settings.rateLimitStore=postgres`, counted in one table (`rate_hits`) that all replicas share. A transaction takes a lock on the key, so two replicas cannot both let the last request through, and the database clock is used so replicas with different clocks agree |
-| An admin changes a server on one replica | the others noticed at their next timed refresh (15 s) | the replica announces it through PostgreSQL `LISTEN/NOTIFY` and the others re-check that server at once |
-| Chart | `replicas: 1` fixed | `replicaCount`, a PodDisruptionBudget when above 1, and the chart **refuses** more than one replica unless the shared store is on |
-
-`settings.servedByHeader=true` adds an `X-Served-By: <pod>` header so load balancing is visible. Defaults are one
-replica and in-memory counters, which behave as before.
-
-**Shown** (`tests/test_scaling.py`, two real replicas on one database behind a round-robin proxy): a full MCP session works across
-replicas; of 16 requests split over both replicas exactly 10 pass a limit of 10, where the in-memory control let all 16 through;
-the same for the login lock-out and the chat limit; a server disabled, added or removed on one replica is seen by the other
-in under a second; both replicas notice a dead upstream and reconnect when it returns; one replica can stop and the service
-carries on. **Not shown:** replicas on separate nodes, or a highly available PostgreSQL (it is still one pod). Metrics stay per
-replica, and Prometheus adds them up.
-
-## Rate limits and metrics
-
-**Rate limit.** Each API key may make 120 requests a minute to `/mcp` (Helm value `settings.mcpRateLimitPerMinute`;
-`0` turns it off). Over the limit, the gateway answers **HTTP 429** with a `Retry-After` header and a JSON message,
-and a client that backs off recovers as soon as its oldest request leaves the window. Each key has its own budget.
-A burst of refused requests writes **one** audit row (outcome `rejected`, "rate limit exceeded"), not thousands. The
-limit covers `/mcp` only, counters are kept per gateway replica, and requests with a wrong key get 401 and are not counted.
-
-**Metrics.** `GET /metrics` on the gateway (port 8080) returns Prometheus text: `urumi_tool_calls_total` (by server,
-tool, outcome and source), `urumi_tool_call_duration_seconds` (a histogram per server), `urumi_upstream_up`,
-`urumi_upstream_enabled`, `urumi_upstream_tools` and `urumi_rate_limited_total`. The Ingress routes only `/api` and `/mcp`
-to the gateway, so `/metrics` is reachable from inside the cluster and not from the internet. A tool or server name
-becomes a label only if it really exists, so a client cannot create unlimited label values. To look at it:
-
-```bash
-kubectl -n gateway exec deploy/gateway-backend -- python -c \
-  "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/metrics').read().decode())"
-```
-
-## Honest limits
-
-See the "Known gaps" list in the [threat model](docs/threat-model.md). The most important: tool permissions are
-per role and default-allow (nothing is blocked until an admin sets rules), and PostgreSQL is a single pod, so the gateway scales but the database does not.
+| Problem | Fix |
+|---|---|
+| The chat says the AI key is missing | `./scripts/llm-secret.sh` (it restarts the gateway for you) |
+| A pod is `Pending` or `ImagePullBackOff` | Run the matching `./scripts/build-*.sh`, then `kubectl get pods -A` |
+| The dashboard shows an old page after an update | Hard-refresh, and `kubectl -n gateway rollout restart deployment/dashboard` |
+| A server shows `unreachable` | Press **Check now** on the Servers page, and `kubectl -n mcp get pods` |
+| Port 8080 is in use | Stop what uses it, or change the mapping in `scripts/k3d-up.sh` |
+| The VM's pages do not open from the Mac | Allow your browser under macOS Local Network settings; see the production guide |
