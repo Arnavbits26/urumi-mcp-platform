@@ -14,6 +14,7 @@ from mcp import types
 
 from .auth import AuthUser
 from .db import Database
+from .metrics import Metrics
 from .permissions import Permissions, decide
 from .registry import Registry, UpstreamError, UpstreamTimeout, public_name, split_public_name
 
@@ -35,9 +36,27 @@ def _error(message: str) -> types.CallToolResult:
 
 
 class ToolService:
-    def __init__(self, db: Database, registry: Registry, permissions: Permissions | None = None) -> None:
+    def __init__(self, db: Database, registry: Registry, permissions: Permissions | None = None, metrics: Metrics | None = None) -> None:
         self.db, self.registry = db, registry
         self.permissions = permissions or Permissions(db)
+        self.metrics = metrics or Metrics()
+
+    async def _audit(self, user: AuthUser, slug, tool, requested: str, duration_ms: int, outcome: str, detail, source: str) -> None:
+        try:
+            await self.db.execute(
+                """INSERT INTO audit_log (user_id, user_email, key_prefix, server_slug, tool_name, requested_name,
+                                          duration_ms, outcome, detail, source)
+                   VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                user.id, user.email, user.key_prefix, slug, tool, requested[:200], duration_ms, outcome, detail, source)
+        except Exception:
+            log.exception("failed to write audit log")
+
+    async def record_rate_limited(self, user: AuthUser, per_minute: int, write_audit: bool) -> None:
+        """A request was refused for going over the key's limit. Counted always; written to the audit log once per burst."""
+        self.metrics.count_rate_limited()
+        if write_audit:
+            await self._audit(user, None, None, "(rate limit)", 0, "rejected",
+                              f"rate limit exceeded: more than {per_minute} requests per minute for this key", "mcp")
 
     async def visible(self, user: AuthUser) -> list:
         """(upstream, tool) pairs this person's role may see: connected, enabled and not blocked for their role."""
@@ -53,7 +72,7 @@ class ToolService:
 
     async def call(self, user: AuthUser, name: str, arguments: dict | None, source: str = "mcp") -> ToolRun:
         started = time.monotonic()
-        slug = tool = None
+        slug = tool = up = None
         outcome, detail = "success", None
         try:
             parts = split_public_name(name)
@@ -85,12 +104,9 @@ class ToolService:
             outcome, detail = "error", str(exc)
             result = _error(str(exc))
         duration_ms = int((time.monotonic() - started) * 1000)
-        try:
-            await self.db.execute(
-                """INSERT INTO audit_log (user_id, user_email, key_prefix, server_slug, tool_name, requested_name,
-                                          duration_ms, outcome, detail, source)
-                   VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-                user.id, user.email, user.key_prefix, slug, tool, name[:200], duration_ms, outcome, detail, source)
-        except Exception:
-            log.exception("failed to write audit log")
+        await self._audit(user, slug, tool, name, duration_ms, outcome, detail, source)
+        # Metric labels must not be controlled by the client: a server or tool name counts only if it really exists.
+        known_tool = up is not None and tool is not None and any(t.name == tool for t in up.tools)
+        self.metrics.observe_call(slug if up is not None and slug else "unknown", tool if known_tool else "unknown",
+                                  outcome, source, duration_ms / 1000)
         return ToolRun(result, outcome, detail, duration_ms, slug, tool)

@@ -15,6 +15,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .auth import AuthUser, authenticate, bearer_token
 from .db import Database
+from .ratelimit import RateLimiter
 from .toolservice import ToolService
 
 
@@ -48,8 +49,9 @@ def build_mcp(tools: ToolService) -> tuple[Server, StreamableHTTPSessionManager]
 class McpAuth:
     """ASGI wrapper: verify the API key, then hand the request to the MCP session manager."""
 
-    def __init__(self, manager: StreamableHTTPSessionManager, db: Database) -> None:
-        self.manager, self.db = manager, db
+    def __init__(self, manager: StreamableHTTPSessionManager, db: Database, limiter: RateLimiter | None = None,
+                 tools: ToolService | None = None) -> None:
+        self.manager, self.db, self.limiter, self.tools = manager, db, limiter, tools
 
     async def __call__(self, scope, receive, send) -> None:
         headers = {k.decode().lower(): v.decode() for k, v in scope["headers"]}
@@ -61,5 +63,17 @@ class McpAuth:
                 (b"content-length", str(len(body)).encode())]})
             await send({"type": "http.response.body", "body": body})
             return
+        if self.limiter is not None and self.limiter.enabled:
+            allowed, retry_after = self.limiter.check(user.key_id)
+            if not allowed:
+                if self.tools is not None:
+                    await self.tools.record_rate_limited(user, self.limiter.per_minute, self.limiter.first_rejection(user.key_id))
+                body = json.dumps({"error": f"rate limit exceeded: at most {self.limiter.per_minute} requests per minute for this key",
+                                   "retry_after_seconds": retry_after}).encode()
+                await send({"type": "http.response.start", "status": 429, "headers": [
+                    (b"content-type", b"application/json"), (b"retry-after", str(retry_after).encode()),
+                    (b"content-length", str(len(body)).encode())]})
+                await send({"type": "http.response.body", "body": body})
+                return
         scope.setdefault("state", {})["user"] = user
         await self.manager.handle_request(scope, receive, send)

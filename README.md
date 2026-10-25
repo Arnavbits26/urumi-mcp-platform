@@ -129,7 +129,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r services/gateway-backend/requirements.txt -r services/wc-mcp-server/requirements.txt \
             -r services/mcp-notes/requirements.txt -r services/mcp-utils/requirements.txt pgserver
 
-(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client test_permissions; do python -m tests.$t; done)
+(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client test_permissions test_ratelimit_metrics; do python -m tests.$t; done)
 (cd services/mcp-utils && python -m tests.test_server)
 (cd services/mcp-notes && python -m tests.test_server)
 (cd services/wc-mcp-server && python -m tests.test_end_to_end)
@@ -152,8 +152,8 @@ upstreams, roles, hashed API keys, an audit log, and the dashboard chat with a t
 | 2 Tool permissions | done (v0.9.0), per role, default allow | `services/gateway-backend/app/permissions.py`, `toolservice.py`, the dashboard's Permissions page, `tests/test_permissions.py`. See "Tool permissions" below |
 | 1 Production-like VPS | done on a k3s VM, not public (a real VPS needs only DNS, an image import and TLS, all described) | `scripts/prod/`, `deploy/values-*-prod.yaml`, `docs/deploy-production.md`. Ran on a 4 GB Ubuntu VM at about 2.1 GB used. Public DNS and TLS were not exercised |
 | 6 Security hardening | partly | SSRF guard (`app/security.py`), encrypted credentials, non-root and read-only containers, NetworkPolicies on the three upstreams. Not done: default-deny everywhere, hardened database images |
-| 7 Scaling | design only | the backend keeps no per-client state, but several replicas are not demonstrated; the chat limiter and login throttle are per replica |
-| 8 Observability | audit log only | no metrics |
+| 7 Scaling | partly: a per-key rate limit on `/mcp` (v0.9.1) | `app/ratelimit.py`. The backend keeps no per-client state, but several replicas are not demonstrated, and the counters are per replica |
+| 8 Observability | partly: Prometheus `/metrics` (v0.9.1) and the audit log | `app/metrics.py`. No dashboards or alerts on top of it |
 | 9 Upgrades and rollback | documented with commands, including a failed upgrade that Helm undoes by itself | `docs/deploy-production.md`, section 7 |
 | 3, 4, 5, bonus multi-store | not attempted | |
 
@@ -181,7 +181,26 @@ curl -s -X PUT http://gateway.localtest.me:8080/api/permissions \
 `allow: true` or `false` sets a rule; `null` removes it. `GET /api/permissions` returns what each role may do and
 which rule decided it. Removing a server removes its rules.
 
+## Rate limits and metrics
+
+**Rate limit.** Each API key may make 120 requests a minute to `/mcp` (Helm value `settings.mcpRateLimitPerMinute`;
+`0` turns it off). Over the limit, the gateway answers **HTTP 429** with a `Retry-After` header and a JSON message,
+and a client that backs off recovers as soon as its oldest request leaves the window. Each key has its own budget.
+A burst of refused requests writes **one** audit row (outcome `rejected`, "rate limit exceeded"), not thousands. The
+limit covers `/mcp` only, counters are kept per gateway replica, and requests with a wrong key get 401 and are not counted.
+
+**Metrics.** `GET /metrics` on the gateway (port 8080) returns Prometheus text: `urumi_tool_calls_total` (by server,
+tool, outcome and source), `urumi_tool_call_duration_seconds` (a histogram per server), `urumi_upstream_up`,
+`urumi_upstream_enabled`, `urumi_upstream_tools` and `urumi_rate_limited_total`. The Ingress routes only `/api` and `/mcp`
+to the gateway, so `/metrics` is reachable from inside the cluster and not from the internet. A tool or server name
+becomes a label only if it really exists, so a client cannot create unlimited label values. To look at it:
+
+```bash
+kubectl -n gateway exec deploy/gateway-backend -- python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/metrics').read().decode())"
+```
+
 ## Honest limits
 
-See the "Known gaps" list in the [threat model](docs/threat-model.md). The most important: there is no rate limit
-on `/mcp`, and tool permissions are per role and default-allow (nothing is blocked until an admin sets rules).
+See the "Known gaps" list in the [threat model](docs/threat-model.md). The most important: tool permissions are
+per role and default-allow (nothing is blocked until an admin sets rules), and several gateway replicas are not demonstrated.

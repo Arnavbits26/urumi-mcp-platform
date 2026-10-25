@@ -66,8 +66,8 @@ HELM="$(grep '^helm upgrade --install' "$LOG")"
 ORDER="$(echo "$HELM" | awk '{print $4}' | tr '\n' ' ')"
 check "installs charts in the right order" '[ "$ORDER" = "store wc-mcp gateway mcp-notes mcp-utils " ]'
 check "store gets the production values and the domain" 'echo "$HELM" | grep -q "store charts/store .*-f deploy/values-prod.yaml.*host=store.1.2.3.4.nip.io.*siteUrl=http://store.1.2.3.4.nip.io"'
-check "gateway gets its domain and both image tags" 'echo "$HELM" | grep -q "gateway charts/gateway .*host=gateway.1.2.3.4.nip.io.*image.tag=0.9.0.*dashboard.image.tag=0.9.0"'
-check "every MCP server uses the version tag" '[ "$(echo "$HELM" | grep -c "image.tag=0.9.0")" = 4 ]'
+check "gateway gets its domain and both image tags" 'echo "$HELM" | grep -q "gateway charts/gateway .*host=gateway.1.2.3.4.nip.io.*image.tag=0.9.1.*dashboard.image.tag=0.9.1"'
+check "every MCP server uses the version tag" '[ "$(echo "$HELM" | grep -c "image.tag=0.9.1")" = 4 ]'
 check "every values file named in a helm call exists" 'for f in $(echo "$HELM" | grep -o "deploy/[A-Za-z0-9._-]*yaml" | sort -u); do [ -f "$ROOT/$f" ] || exit 1; done'
 check "every chart named in a helm call exists" 'for c in $(echo "$HELM" | grep -o "charts/[a-z-]*" | sort -u); do [ -f "$ROOT/$c/Chart.yaml" ] || exit 1; done'
 check "gateway secrets exist BEFORE the gateway is installed" '[ "$(grep -n "create secret generic gateway-secrets" "$LOG" | head -1 | cut -d: -f1)" -lt "$(grep -n "^helm upgrade --install gateway" "$LOG" | head -1 | cut -d: -f1)" ]'

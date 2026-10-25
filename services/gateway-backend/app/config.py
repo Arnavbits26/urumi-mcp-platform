@@ -50,5 +50,8 @@ class Settings:
         self.chat_max_steps = int(os.environ.get("CHAT_MAX_STEPS", "6"))
         self.chat_timeout = float(os.environ.get("CHAT_TIMEOUT_SECONDS", "120"))
         self.chat_rate_per_minute = int(os.environ.get("CHAT_RATE_PER_MINUTE", "12"))
+        # Requests per API key per window on /mcp. 0 turns the limit off. The window is only changed in tests.
+        self.mcp_rate_limit_per_minute = int(os.environ.get("MCP_RATE_LIMIT_PER_MINUTE", "120"))
+        self.mcp_rate_window_seconds = float(os.environ.get("MCP_RATE_WINDOW_SECONDS", "60"))
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8080"))

@@ -106,6 +106,9 @@ class Registry:
                 log.exception("refresh loop error")
 
     # ---- reading ---------------------------------------------------------------------------
+    def all(self) -> list[Upstream]:
+        return list(self._by_slug.values())
+
     def get(self, slug: str) -> Upstream | None:
         return self._by_slug.get(slug)
 

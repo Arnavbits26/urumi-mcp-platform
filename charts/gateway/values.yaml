@@ -40,6 +40,7 @@ settings:
   refreshTimeoutSeconds: 10
   refreshIntervalSeconds: 15
   failThreshold: 2
+  mcpRateLimitPerMinute: 120   # requests per API key per minute on /mcp; 0 turns the limit off
 
 ingress:
   enabled: true

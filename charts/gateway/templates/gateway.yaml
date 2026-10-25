@@ -74,6 +74,7 @@ spec:
             - { name: REFRESH_TIMEOUT_SECONDS, value: {{ .Values.settings.refreshTimeoutSeconds | quote }} }
             - { name: REFRESH_INTERVAL_SECONDS, value: {{ .Values.settings.refreshIntervalSeconds | quote }} }
             - { name: FAIL_THRESHOLD, value: {{ .Values.settings.failThreshold | quote }} }
+            - { name: MCP_RATE_LIMIT_PER_MINUTE, value: {{ .Values.settings.mcpRateLimitPerMinute | quote }} }
           startupProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 3

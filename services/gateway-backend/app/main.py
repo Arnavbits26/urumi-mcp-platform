@@ -15,7 +15,9 @@ from .llm import LLMClient
 from .config import Settings
 from .db import Database
 from .mcp_gateway import McpAuth, build_mcp
+from .metrics import Metrics
 from .permissions import Permissions
+from .ratelimit import RateLimiter
 from .registry import Registry
 from .toolservice import ToolService
 from .security import CredentialBox, hash_key, hash_password, parse_key_prefix
@@ -69,7 +71,9 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
     box = CredentialBox(settings.encryption_key)
     registry = Registry(db, box, settings)
     permissions = Permissions(db)
-    tools = ToolService(db, registry, permissions)
+    metrics = Metrics()
+    limiter = RateLimiter(settings.mcp_rate_limit_per_minute, settings.mcp_rate_window_seconds)
+    tools = ToolService(db, registry, permissions, metrics)
     llm = (LLMClient(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout, transport=llm_transport)
            if settings.llm_api_key else None)
     _, manager = build_mcp(tools)
@@ -104,4 +108,9 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
             return JSONResponse({"ready": False}, status_code=503)
         return PlainTextResponse("ok")
 
-    return Root(api, McpAuth(manager, db))
+    @api.get("/metrics")
+    async def metrics_endpoint() -> PlainTextResponse:
+        # Not routed by the Ingress (it sends only /api and /mcp here), so only in-cluster scrapers reach it.
+        return PlainTextResponse(metrics.render(registry.all()), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+    return Root(api, McpAuth(manager, db, limiter, tools))
