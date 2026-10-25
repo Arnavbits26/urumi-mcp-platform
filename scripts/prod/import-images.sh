@@ -4,7 +4,7 @@
 #   A real VPS over SSH:     SSH_TARGET=ubuntu@203.0.113.10 ./scripts/prod/import-images.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-VERSION="${VERSION:-0.9.1}"
+VERSION="${VERSION:-0.9.2}"
 FILE="$ROOT/dist/urumi-images-$VERSION.tar"
 NAME="${VM_NAME:-urumi-prod}"
 [ -f "$FILE" ] || { echo "$FILE not found. Run scripts/prod/export-images.sh first."; exit 1; }

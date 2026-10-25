@@ -14,7 +14,8 @@ from .chat import router as chat_router
 from .llm import LLMClient
 from .config import Settings
 from .db import Database
-from .mcp_gateway import McpAuth, build_mcp
+from .compact import Compact
+from .mcp_gateway import McpAuth, build_compact_mcp, build_mcp
 from .metrics import Metrics
 from .permissions import Permissions
 from .ratelimit import RateLimiter
@@ -56,12 +57,14 @@ class Root:
     (A Starlette Mount at /mcp would 307-redirect /mcp to /mcp/, which MCP clients do not follow.)
     """
 
-    def __init__(self, api, mcp) -> None:
-        self.api, self.mcp = api, mcp
+    def __init__(self, api, mcp, compact=None) -> None:
+        self.api, self.mcp, self.compact = api, mcp, compact
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "http" and scope["path"] in ("/mcp", "/mcp/"):
             return await self.mcp(scope, receive, send)
+        if scope["type"] == "http" and self.compact is not None and scope["path"] in ("/mcp/compact", "/mcp/compact/"):
+            return await self.compact(scope, receive, send)
         return await self.api(scope, receive, send)
 
 
@@ -76,14 +79,16 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
     tools = ToolService(db, registry, permissions, metrics)
     llm = (LLMClient(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout, transport=llm_transport)
            if settings.llm_api_key else None)
+    compact = Compact(tools)
     _, manager = build_mcp(tools)
+    _, compact_manager = build_compact_mcp(compact)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         await db.connect()
         await bootstrap(db, settings)
         await registry.start()
-        async with manager.run():
+        async with manager.run(), compact_manager.run():
             log.info("gateway ready")
             yield
         await registry.stop()
@@ -92,7 +97,7 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
         await db.close()
 
     api = FastAPI(title="Urumi MCP Gateway", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
-    api.state.gw = SimpleNamespace(db=db, registry=registry, box=box, settings=settings, tools=tools, permissions=permissions, llm=llm)
+    api.state.gw = SimpleNamespace(db=db, registry=registry, box=box, settings=settings, tools=tools, permissions=permissions, compact=compact, llm=llm)
     api.include_router(router)
     api.include_router(chat_router)
 
@@ -113,4 +118,4 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
         # Not routed by the Ingress (it sends only /api and /mcp here), so only in-cluster scrapers reach it.
         return PlainTextResponse(metrics.render(registry.all()), media_type="text/plain; version=0.0.4; charset=utf-8")
 
-    return Root(api, McpAuth(manager, db, limiter, tools))
+    return Root(api, McpAuth(manager, db, limiter, tools), McpAuth(compact_manager, db, limiter, tools))

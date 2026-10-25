@@ -20,7 +20,7 @@ gateway (credential plus NetworkPolicy). **Per-role tool permissions (v0.9.0):**
 tools, or a whole server, for the member role (and for admins). A blocked tool is hidden from the tool list that
 MCP clients and the chat see, and a direct call is rejected and audited with outcome `rejected`; the upstream is
 never contacted. For example, "members read orders, only admins create products or change order status" is
-two rules, or one click (Make read-only for members). **Limits of this control:** the default is allow, so
+two rules, or one click (Make read-only for members). The search-and-run endpoint (`/mcp/compact`) cannot be used around this: a person's searches only see tools their role may use, and `run_tool` goes through the same check. **Limits of this control:** the default is allow, so
 nothing is restricted until an admin sets rules; rules are per role, not per person; and tools are matched by the
 name the upstream reports, so a server that renames a tool would need its rule set again.
 

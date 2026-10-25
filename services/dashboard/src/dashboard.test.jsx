@@ -457,3 +457,49 @@ describe('permissions', () => {
     expect(screen.getByRole('button', { name: /Members, woocommerce__list_orders: allowed/ })).toBeInTheDocument()
   })
 })
+
+describe('chat tool mode', () => {
+  const plain = { reply: 'One order.', steps: 2, model: 'test-model', tool_mode: 'all', tools_offered: 13, tools_available: 13, tool_calls: [] }
+  const compact = {
+    reply: 'Here are your invoices.', steps: 3, model: 'test-model', tool_mode: 'compact', tools_offered: 3, tools_available: 250,
+    tool_calls: [
+      { name: 'search_tools', arguments: { query: 'list invoices' }, outcome: 'success', duration_ms: 3, preview: '{}' },
+      { name: 'billing__list_invoices', arguments: {}, outcome: 'success', duration_ms: 40, preview: 'x' },
+    ],
+  }
+  async function openChat(extra = {}) {
+    const calls = fakeGateway({ 'GET /api/me': [200, MEMBER], 'GET /api/chat/status': [200, { configured: true, model: 'test-model' }], ...extra })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Chat' })
+    return calls
+  }
+
+  it('offers Automatic, All tools and Search first, with Automatic selected', async () => {
+    await openChat()
+    const select = await screen.findByLabelText('Tools given to the AI')
+    expect(select).toHaveValue('auto')
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Automatic', 'All tools', 'Search first'])
+  })
+
+  it('"Search first" is sent to the gateway, and the answer says how many tools the AI was offered', async () => {
+    const user = userEvent.setup()
+    const calls = await openChat({ 'POST /api/chat': [200, compact] })
+    await user.selectOptions(await screen.findByLabelText('Tools given to the AI'), 'compact')
+    await user.type(screen.getByLabelText('Your message'), 'invoices{Enter}')
+    expect(await screen.findByText('Here are your invoices.')).toBeInTheDocument()
+    expect(calls.find((c) => c.method === 'POST' && c.url === '/api/chat').body).toEqual({ messages: [{ role: 'user', content: 'invoices' }], tool_mode: 'compact' })
+    expect(screen.getByText('Search first: the AI was offered 3 of 250 tools.')).toBeInTheDocument()
+    expect(screen.getByText('Used 2 tools')).toBeInTheDocument()
+    expect(screen.getByText('billing__list_invoices')).toBeInTheDocument() // the tool that really ran, not a wrapper
+  })
+
+  it('"All tools" is sent too, and an ordinary answer shows no note', async () => {
+    const user = userEvent.setup()
+    const calls = await openChat({ 'POST /api/chat': [200, plain] })
+    await user.selectOptions(await screen.findByLabelText('Tools given to the AI'), 'all')
+    await user.type(screen.getByLabelText('Your message'), 'orders{Enter}')
+    expect(await screen.findByText('One order.')).toBeInTheDocument()
+    expect(calls.find((c) => c.method === 'POST' && c.url === '/api/chat').body.tool_mode).toBe('all')
+    expect(screen.queryByText(/Search first: the AI was offered/)).toBeNull()
+  })
+})

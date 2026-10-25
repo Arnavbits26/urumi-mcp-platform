@@ -43,7 +43,7 @@ are additionally locked by NetworkPolicy so that only the gateway pods can conne
 |---|---|
 | `charts/store` | WordPress, MariaDB, volumes, ingress, and an idempotent WP-CLI Job that installs WooCommerce |
 | `services/wc-mcp-server` | MCP server for the store: list/create products, list/get orders, update order status, over the WooCommerce REST API |
-| `services/gateway-backend` | Users, keys, sessions, server registry, tool aggregation and routing, per-role tool permissions, per-key rate limit, Prometheus metrics, audit log, REST API, chat agent |
+| `services/gateway-backend` | Users, keys, sessions, server registry, tool aggregation and routing, per-role tool permissions, per-key rate limit, Prometheus metrics, a three-tool search-and-run front for large catalogues (`/mcp/compact`), audit log, REST API, chat agent |
 | `services/dashboard` | React app served by nginx: servers, team, keys, audit log, chat |
 | `services/mcp-notes`, `mcp-utils` | Two further upstreams (stateful with bearer auth, stateless with header auth) |
 
@@ -107,6 +107,7 @@ edits. (A caveat: inside the cluster that name also resolves to 127.0.0.1, which
 | API key hashing | SHA-256 | Keys are 256-bit random, so there is nothing to brute-force, and checking happens on every request. Passwords (human-chosen) use scrypt instead. |
 | Dashboard auth | Server-side sessions, not JWT | Logout, disabling and resets take effect at once. Costs one database read per request. |
 | Tool permissions | Per role, default allow, most specific rule wins | A fresh install behaves as before, and the rules are few enough to read at a glance. Per-person rules and deny-by-default are the next step. Enforced in `ToolService`, so the MCP endpoint and the chat cannot differ. |
+| Many tools | Search, schema, run: three tools over the same `ToolService` | The model sees three small definitions instead of hundreds. Because `run_tool` is just another caller of `ToolService`, nothing about access control, auditing or limits had to be built twice. Search is a weighted word match, which is easy to explain and good enough for a catalogue of hundreds; embeddings would be the next step for thousands. |
 | Rate limit and metrics | In memory, hand-written, per replica | No extra service or library to run or explain. The cost: counters are per replica and reset on restart, so a metrics scraper and a shared store are the next step. `/metrics` is not routed by the Ingress. |
 | Chat and MCP | One shared `ToolService` | One code path to secure and audit. The chat does not go through HTTP `/mcp`, so it is not the same as an external client over the network. |
 | Schema | `CREATE IF NOT EXISTS` | Simple for one release; a migration tool is needed once the schema must change in place. |

@@ -75,6 +75,8 @@ spec:
             - { name: REFRESH_INTERVAL_SECONDS, value: {{ .Values.settings.refreshIntervalSeconds | quote }} }
             - { name: FAIL_THRESHOLD, value: {{ .Values.settings.failThreshold | quote }} }
             - { name: MCP_RATE_LIMIT_PER_MINUTE, value: {{ .Values.settings.mcpRateLimitPerMinute | quote }} }
+            - { name: CHAT_TOOL_MODE, value: {{ .Values.chat.toolMode | quote }} }
+            - { name: CHAT_COMPACT_ABOVE, value: {{ .Values.chat.compactAbove | quote }} }
           startupProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 3

@@ -3,7 +3,7 @@
 # copied to a server. Needs Docker running. Layer caching makes repeat runs fast.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-VERSION="${VERSION:-0.9.1}"
+VERSION="${VERSION:-0.9.2}"
 OUT="$ROOT/dist/urumi-images-$VERSION.tar"
 mkdir -p "$ROOT/dist"
 

@@ -129,7 +129,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r services/gateway-backend/requirements.txt -r services/wc-mcp-server/requirements.txt \
             -r services/mcp-notes/requirements.txt -r services/mcp-utils/requirements.txt pgserver
 
-(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client test_permissions test_ratelimit_metrics; do python -m tests.$t; done)
+(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client test_permissions test_ratelimit_metrics test_many_tools; do python -m tests.$t; done)
 (cd services/mcp-utils && python -m tests.test_server)
 (cd services/mcp-notes && python -m tests.test_server)
 (cd services/wc-mcp-server && python -m tests.test_end_to_end)
@@ -155,7 +155,8 @@ upstreams, roles, hashed API keys, an audit log, and the dashboard chat with a t
 | 7 Scaling | partly: a per-key rate limit on `/mcp` (v0.9.1) | `app/ratelimit.py`. The backend keeps no per-client state, but several replicas are not demonstrated, and the counters are per replica |
 | 8 Observability | partly: Prometheus `/metrics` (v0.9.1) and the audit log | `app/metrics.py`. No dashboards or alerts on top of it |
 | 9 Upgrades and rollback | documented with commands, including a failed upgrade that Helm undoes by itself | `docs/deploy-production.md`, section 7 |
-| 3, 4, 5, bonus multi-store | not attempted | |
+| 4 Handling many tools | done (v0.9.2): search, schema, run | `app/compact.py`, the `/mcp/compact` endpoint, the chat's "Search first" mode, `tests/test_many_tools.py` (250 tools on 10 servers). See "Handling many tools" below |
+| 3, 5, bonus multi-store | not attempted | |
 
 ## Tool permissions
 
@@ -180,6 +181,38 @@ curl -s -X PUT http://gateway.localtest.me:8080/api/permissions \
 
 `allow: true` or `false` sets a rule; `null` removes it. `GET /api/permissions` returns what each role may do and
 which rule decided it. Removing a server removes its rules.
+
+## Handling many tools
+
+Ten servers can offer hundreds of tools, too many to describe to a model on every request. The gateway offers the
+same catalogue through **three small tools**, at a second endpoint, `/mcp/compact` (the Ingress already sends it to the
+gateway, since it starts with `/mcp`):
+
+| Tool | What it does |
+|---|---|
+| `search_tools` | Find tools by what they do ("list invoices"). Returns the best matches with exact names and inputs. With no query it lists the servers. |
+| `get_tool_schema` | The full description and input schema of one tool |
+| `run_tool` | Run one tool by its exact name |
+
+Searching reads the cached tool list and contacts no upstream. **`run_tool` goes through the same `ToolService` as a
+direct call**, so permissions, the rate limit, timeouts, the audit log (under the real tool's name) and the metrics all
+apply, and a person can only find and run the tools their role may use.
+
+The **dashboard chat** can use this too. Under the message box, **Tools given to the AI** has three choices: *Automatic*
+(search first once there are more than `chat.compactAbove` tools, default 30), *All tools*, and *Search first*. After a
+search-first answer the chat says how many tools the AI was offered ("3 of 250 tools"), and the tool list shows the tool
+that really ran. Set the default with the Helm values `chat.toolMode` and `chat.compactAbove`. To use it from Claude Code:
+
+```bash
+claude mcp add --transport http urumi-compact http://gateway.localtest.me:8080/mcp/compact \
+  --header "Authorization: Bearer $NEWKEY"
+```
+
+**Measured** (`tests/test_many_tools.py`: 250 tools on 10 servers, five kinds of thing per server with some names shared
+across servers): the three tools take 1.6 KB where the full list takes 114 KB (1.4%), and 15 of 15 plain-language
+questions put the right tool first. That catalogue and those questions were written by me, so real catalogues will be
+messier. The search is simple on purpose: weighted word matches on the tool name, server, inputs and description, with a
+few everyday verb synonyms (no model, no index to maintain).
 
 ## Rate limits and metrics
 

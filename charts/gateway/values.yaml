@@ -25,6 +25,10 @@ llm:
   model: llama-3.3-70b-versatile
   secretName: llm-credentials
 
+chat:
+  toolMode: auto        # auto, all, or compact (search first). Auto switches to compact above compactAbove tools
+  compactAbove: 30
+
 dashboard:
   image:
     repository: urumi/dashboard

@@ -46,7 +46,7 @@ If any step fails, stop and report it; do not continue.
 ## 2. Build the images (Docker open)
 
 ```bash
-./scripts/prod/export-images.sh      # builds urumi/*:0.9.1 and saves dist/urumi-images-0.9.1.tar
+./scripts/prod/export-images.sh      # builds urumi/*:0.9.2 and saves dist/urumi-images-0.9.2.tar
 ```
 
 ## 3. Quit Docker Desktop
@@ -89,8 +89,8 @@ address. For the external-client script use `URUMI_URL=http://gateway.$BASE_DOMA
 helm history gateway -n gateway                  # revisions of the release
 ```
 
-A normal upgrade is a new image version: `VERSION=0.9.2 ./scripts/prod/export-images.sh`, import, then
-`VERSION=0.9.2 ./scripts/prod/deploy.sh`. Data volumes stay.
+A normal upgrade is a new image version: `VERSION=0.9.3 ./scripts/prod/export-images.sh`, import, then
+`VERSION=0.9.3 ./scripts/prod/deploy.sh`. Data volumes stay.
 
 To show a **safe failure**, upgrade to an image that does not exist. `--atomic` makes Helm undo the upgrade itself:
 
@@ -100,7 +100,7 @@ if [ -z "$BASE_DOMAIN" ]; then
   echo "STOP: BASE_DOMAIN is empty. Run the export line first."
 else
   helm upgrade gateway charts/gateway -n gateway -f deploy/values-gateway-prod.yaml \
-    --set host=gateway.$BASE_DOMAIN --set image.tag=0.0.0-bad --set dashboard.image.tag=0.9.1 \
+    --set host=gateway.$BASE_DOMAIN --set image.tag=0.0.0-bad --set dashboard.image.tag=0.9.2 \
     --atomic --timeout 2m
 fi
 kubectl -n gateway get pods          # the old pod kept serving the whole time

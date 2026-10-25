@@ -227,3 +227,9 @@ section > h2 { margin-bottom: 0.75rem; }
 .perm-source { display: block; margin-top: 0.25rem; font-size: 0.78rem; color: var(--ink-soft); }
 .perm-reset { padding: 0 0.4rem; font-size: 0.78rem; }
 .perm-list { margin: 0.5rem 0 0.2rem; padding-left: 1rem; list-style: disc; }
+
+/* ---- chat: how tools are handed to the AI ---- */
+.tool-mode { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin: 0.8rem 0 0.4rem; font-size: 0.9rem; }
+.tool-mode label { font-weight: 600; }
+.tool-mode select { font: inherit; padding: 0.25rem 0.5rem; border: 1px solid var(--rule-strong); border-radius: 6px; background: var(--panel); }
+.tools-note { font-size: 0.85rem; margin-top: 0.3rem; }

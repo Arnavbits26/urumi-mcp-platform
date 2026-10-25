@@ -49,6 +49,11 @@ class Settings:
         self.llm_timeout = float(os.environ.get("LLM_TIMEOUT_SECONDS", "60"))
         self.chat_max_steps = int(os.environ.get("CHAT_MAX_STEPS", "6"))
         self.chat_timeout = float(os.environ.get("CHAT_TIMEOUT_SECONDS", "120"))
+        # How the chat hands tools to the model: "all" of them, "compact" (search first), or "auto" (compact above N tools).
+        self.chat_tool_mode = os.environ.get("CHAT_TOOL_MODE", "auto").strip().lower()
+        if self.chat_tool_mode not in ("auto", "all", "compact"):
+            raise RuntimeError("CHAT_TOOL_MODE must be auto, all or compact")
+        self.chat_compact_above = int(os.environ.get("CHAT_COMPACT_ABOVE", "30"))
         self.chat_rate_per_minute = int(os.environ.get("CHAT_RATE_PER_MINUTE", "12"))
         # Requests per API key per window on /mcp. 0 turns the limit off. The window is only changed in tests.
         self.mcp_rate_limit_per_minute = int(os.environ.get("MCP_RATE_LIMIT_PER_MINUTE", "120"))

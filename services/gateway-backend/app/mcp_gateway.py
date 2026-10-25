@@ -14,6 +14,7 @@ from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .auth import AuthUser, authenticate, bearer_token
+from .compact import META_TOOLS, RUN, SCHEMA, SEARCH, Compact
 from .db import Database
 from .ratelimit import RateLimiter
 from .toolservice import ToolService
@@ -41,6 +42,45 @@ def build_mcp(tools: ToolService) -> tuple[Server, StreamableHTTPSessionManager]
         app=server, json_response=True, stateless=True,
         # Reached through cluster DNS and the ingress, under varying Host headers. Access control is
         # the API key plus network policy, not Host-header filtering (that guards browsers on localhost).
+        security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    return server, manager
+
+
+def build_compact_mcp(compact: Compact) -> tuple[Server, StreamableHTTPSessionManager]:
+    """The same gateway seen through three tools (search, schema, run) instead of the whole catalogue: /mcp/compact."""
+    server = Server(
+        "urumi-gateway-compact",
+        instructions=("A large catalogue behind three tools. Use search_tools to find the tool you need, get_tool_schema to see its inputs, "
+                      "and run_tool to run it by its exact name."),
+    )
+
+    def caller() -> AuthUser:
+        return server.request_context.request.state.user
+
+    def text(obj) -> types.CallToolResult:
+        return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(obj, separators=(",", ":")))])
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return META_TOOLS
+
+    @server.call_tool(validate_input=False)
+    async def call_tool(name: str, arguments: dict) -> types.CallToolResult:
+        arguments = arguments or {}
+        if name == SEARCH:
+            return text(await compact.search(caller(), arguments.get("query"), arguments.get("server"), arguments.get("limit", 8)))
+        if name == SCHEMA:
+            found = await compact.schema(caller(), arguments.get("name"))
+            if found is None:
+                return types.CallToolResult(content=[types.TextContent(type="text", text="No such tool is available to you. Use search_tools to find the exact name.")], isError=True)
+            return text(found)
+        if name == RUN:
+            return (await compact.run(caller(), arguments.get("name"), arguments.get("arguments"), source="mcp")).result
+        return types.CallToolResult(content=[types.TextContent(type="text", text=f"Unknown tool '{name}'. This endpoint has: {SEARCH}, {SCHEMA}, {RUN}.")], isError=True)
+
+    manager = StreamableHTTPSessionManager(
+        app=server, json_response=True, stateless=True,
         security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
     return server, manager

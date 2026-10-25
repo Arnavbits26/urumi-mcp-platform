@@ -46,6 +46,7 @@ export default function Chat({ me }) {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [toolMode, setToolMode] = useState('auto')
   const end = useRef(null)
 
   useEffect(() => {
@@ -64,8 +65,10 @@ export default function Chat({ me }) {
     setBusy(true)
     setError('')
     try {
-      const out = await api.post('/chat', { messages: next.slice(-20).map(({ role, content }) => ({ role, content })) })
-      setMessages([...next, { role: 'assistant', content: out.reply, tool_calls: out.tool_calls }])
+      const body = { messages: next.slice(-20).map(({ role, content }) => ({ role, content })) }
+      if (toolMode !== 'auto') body.tool_mode = toolMode // otherwise the gateway's own setting decides
+      const out = await api.post('/chat', body)
+      setMessages([...next, { role: 'assistant', content: out.reply, tool_calls: out.tool_calls, info: out }])
     } catch (err) {
       setError(err.message)
     } finally {
@@ -116,6 +119,11 @@ export default function Chat({ me }) {
               <p className="speaker">{m.role === 'user' ? 'You' : 'Assistant'}</p>
               <p className="said">{m.content}</p>
               {m.role === 'assistant' && <ToolCalls calls={m.tool_calls} />}
+              {m.role === 'assistant' && m.info?.tool_mode === 'compact' && (
+                <p className="muted tools-note">
+                  Search first: the AI was offered {m.info.tools_offered} of {plural(m.info.tools_available, 'tool')}.
+                </p>
+              )}
             </li>
           ))}
         </ol>
@@ -127,6 +135,18 @@ export default function Chat({ me }) {
       )}
       <ErrorNote>{error}</ErrorNote>
       <div ref={end} />
+
+      {ready && (
+        <div className="tool-mode">
+          <label htmlFor="tool-mode">Tools given to the AI</label>
+          <select id="tool-mode" value={toolMode} onChange={(e) => setToolMode(e.target.value)} disabled={busy}>
+            <option value="auto">Automatic</option>
+            <option value="all">All tools</option>
+            <option value="compact">Search first</option>
+          </select>
+          <span className="muted">Search first gives the AI three small tools instead of every tool, which keeps requests small when there are many servers.</span>
+        </div>
+      )}
 
       <form
         className="composer"

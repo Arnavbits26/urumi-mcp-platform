@@ -5,6 +5,9 @@ API keys, Create key). It never needs the upstream servers' credentials.
 
 Gateway address: `http://gateway.localtest.me:8080/mcp`
 
+The same catalogue is also available through three small tools (search, schema, run) at
+`http://gateway.localtest.me:8080/mcp/compact`, which suits very large catalogues. See "Handling many tools" in the README.
+
 ## A. MCP Inspector (free, uses no AI model)
 The official MCP debugging tool. Needs Node.js (`node --version`).
 

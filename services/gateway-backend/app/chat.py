@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from .api import current_user, gw
 from .auth import AuthUser
+from .compact import META_NAMES, META_TOOLS, RUN, SCHEMA, SEARCH, Compact
 from .llm import LLMError
 from .toolservice import ToolService
 
@@ -35,6 +36,10 @@ Rules:
 - Only change things (create products, update orders) when the user clearly asked for that change in this conversation.
 - Be concise. Today's date is {today} (UTC)."""
 
+
+COMPACT_NOTE = """
+
+You reach a large catalogue through three tools: search_tools (find tools by what they do), get_tool_schema (see ONE tool's inputs) and run_tool (run ONE tool by its exact name). Search first. Never guess a tool name, and only run a tool that search_tools returned."""
 
 # ---- turning MCP tools into the model's function format ---------------------------------------
 
@@ -83,9 +88,38 @@ def result_text(result: types.CallToolResult) -> str:
 
 # ---- the loop -----------------------------------------------------------------------------------
 
-async def run_agent(llm, tools: ToolService, user: AuthUser, history: list[dict], max_steps: int) -> dict:
-    model_tools = to_model_tools(await tools.list_tools(user))
-    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT.format(today=datetime.now(timezone.utc).date().isoformat())}]
+def clip(text: str) -> str:
+    return text if len(text) <= MAX_RESULT_CHARS else text[:MAX_RESULT_CHARS] + f"\n[truncated {len(text) - MAX_RESULT_CHARS} characters]"
+
+
+async def run_meta(compact: Compact, user: AuthUser, name: str, args: dict, entry: dict) -> str:
+    """Run one of the three search-first tools. For run_tool the trace shows the tool that really ran."""
+    started = time.monotonic()
+    if name == SEARCH:
+        text = json.dumps(await compact.search(user, args.get("query"), args.get("server"), args.get("limit", 8)), separators=(",", ":"))
+        entry.update(outcome="success", duration_ms=int((time.monotonic() - started) * 1000))
+        return clip(text)
+    if name == SCHEMA:
+        found = await compact.schema(user, args.get("name"))
+        entry.update(outcome="success" if found else "rejected", duration_ms=int((time.monotonic() - started) * 1000))
+        return clip(json.dumps(found, separators=(",", ":"))) if found else "No such tool is available to you. Use search_tools to find the exact name."
+    run = await compact.run(user, args.get("name"), args.get("arguments"), source="chat")    # same checks, audit and limits as any call
+    inner = args.get("name")
+    entry.update(name=inner if isinstance(inner, str) and inner.strip() else RUN,
+                 arguments=args.get("arguments") if isinstance(args.get("arguments"), dict) else {},
+                 outcome=run.outcome, duration_ms=run.duration_ms)
+    return result_text(run.result)
+
+
+async def run_agent(llm, tools: ToolService, user: AuthUser, history: list[dict], max_steps: int, *,
+                    compact: Compact | None = None, mode: str = "all", compact_above: int = 30) -> dict:
+    visible = await tools.list_tools(user)
+    # With many tools, hand the model three small tools instead of the whole catalogue.
+    use_compact = compact is not None and (mode == "compact" or (mode == "auto" and len(visible) > compact_above))
+    model_tools = to_model_tools(META_TOOLS if use_compact else visible)
+    info = {"tools_offered": len(model_tools), "tools_available": len(visible), "tool_mode": "compact" if use_compact else "all"}
+    system = SYSTEM_PROMPT.format(today=datetime.now(timezone.utc).date().isoformat()) + (COMPACT_NOTE if use_compact else "")
+    messages: list[dict] = [{"role": "system", "content": system}]
     messages += history[-MAX_HISTORY:]
     trace: list[dict] = []
 
@@ -93,7 +127,7 @@ async def run_agent(llm, tools: ToolService, user: AuthUser, history: list[dict]
         reply = await llm.complete(messages, model_tools)
         calls = reply.get("tool_calls") or []
         if not calls:
-            return {"reply": (reply.get("content") or "").strip() or "I have nothing to add.", "tool_calls": trace, "steps": step}
+            return {"reply": (reply.get("content") or "").strip() or "I have nothing to add.", "tool_calls": trace, "steps": step, **info}
 
         messages.append({"role": "assistant", "content": reply.get("content") or None, "tool_calls": calls})
         for index, call in enumerate(calls):
@@ -111,15 +145,18 @@ async def run_agent(llm, tools: ToolService, user: AuthUser, history: list[dict]
                     args, text = None, "The arguments were not valid JSON. Call the tool again with a valid JSON object."
                 if args is not None:
                     entry["arguments"] = args
-                    run = await tools.call(user, name, args, source="chat")   # same path as external clients
-                    entry.update(outcome=run.outcome, duration_ms=run.duration_ms)
-                    text = result_text(run.result)
+                    if use_compact and name in META_NAMES:
+                        text = await run_meta(compact, user, name, args, entry)
+                    else:
+                        run = await tools.call(user, name, args, source="chat")   # same path as external clients
+                        entry.update(outcome=run.outcome, duration_ms=run.duration_ms)
+                        text = result_text(run.result)
             entry["preview"] = text[:600]
             trace.append(entry)
             messages.append({"role": "tool", "tool_call_id": call.get("id", f"call_{step}_{index}"), "content": text})
 
     return {"reply": "I reached my step limit before finishing. Here is what I did so far; ask me to continue if you want more.",
-            "tool_calls": trace, "steps": max_steps}
+            "tool_calls": trace, "steps": max_steps, **info}
 
 
 # ---- HTTP endpoints -----------------------------------------------------------------------------
@@ -134,6 +171,7 @@ class ChatMessage(BaseModel):
 
 class ChatIn(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
+    tool_mode: Literal["auto", "all", "compact"] | None = None    # how tools are handed to the model; default from the server setting
 
 
 def _rate_limited(g, user_id: str) -> bool:
@@ -165,7 +203,8 @@ async def chat(body: ChatIn, request: Request, user: AuthUser = Depends(current_
         raise HTTPException(429, "You are sending messages too quickly. Wait a moment and try again.")
     try:
         out = await asyncio.wait_for(
-            run_agent(g.llm, g.tools, user, [m.model_dump() for m in body.messages], g.settings.chat_max_steps),
+            run_agent(g.llm, g.tools, user, [m.model_dump() for m in body.messages], g.settings.chat_max_steps,
+                      compact=g.compact, mode=body.tool_mode or g.settings.chat_tool_mode, compact_above=g.settings.chat_compact_above),
             timeout=g.settings.chat_timeout)
     except asyncio.TimeoutError:
         raise HTTPException(504, "The assistant took too long to finish. Try a simpler request.") from None
