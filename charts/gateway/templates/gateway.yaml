@@ -1,3 +1,6 @@
+{{- if and (gt (int .Values.replicaCount) 1) (ne .Values.settings.rateLimitStore "postgres") }}
+{{- fail "replicaCount above 1 needs settings.rateLimitStore=postgres, otherwise each replica counts requests separately and every limit multiplies by the number of replicas" }}
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -22,7 +25,7 @@ metadata:
     {{- include "gateway.labels" . | nindent 4 }}
     app.kubernetes.io/name: gateway-backend
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       app.kubernetes.io/name: gateway-backend
@@ -77,6 +80,8 @@ spec:
             - { name: MCP_RATE_LIMIT_PER_MINUTE, value: {{ .Values.settings.mcpRateLimitPerMinute | quote }} }
             - { name: CHAT_TOOL_MODE, value: {{ .Values.chat.toolMode | quote }} }
             - { name: CHAT_COMPACT_ABOVE, value: {{ .Values.chat.compactAbove | quote }} }
+            - { name: RATE_LIMIT_STORE, value: {{ .Values.settings.rateLimitStore | quote }} }
+            - { name: SERVED_BY_HEADER, value: {{ .Values.settings.servedByHeader | quote }} }
           startupProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 3

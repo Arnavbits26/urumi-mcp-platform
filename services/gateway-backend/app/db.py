@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS tool_rules (
   updated_by text,
   PRIMARY KEY (role, server_slug, tool_name)
 );
+CREATE TABLE IF NOT EXISTS rate_hits (
+  key text NOT NULL,
+  ts timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS rate_hits_key_ts ON rate_hits (key, ts);
 """
 
 
@@ -99,6 +104,14 @@ class Database:
                 await conn.execute(SCHEMA)
             finally:
                 await conn.execute("SELECT pg_advisory_unlock(7301)")
+
+    @property
+    def dsn(self) -> str:
+        return self._dsn
+
+    async def notify(self, channel: str, payload: str = "") -> None:
+        """Wake every gateway replica that is listening on this channel."""
+        await self.pool.execute("SELECT pg_notify($1, $2)", channel, payload)
 
     async def close(self) -> None:
         if self.pool:

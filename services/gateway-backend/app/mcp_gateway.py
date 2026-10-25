@@ -6,6 +6,7 @@ is done by ToolService, which the dashboard chat agent shares.
 """
 from __future__ import annotations
 
+import inspect
 import json
 
 from mcp import types
@@ -45,6 +46,11 @@ def build_mcp(tools: ToolService) -> tuple[Server, StreamableHTTPSessionManager]
         security_settings=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
     return server, manager
+
+
+async def _resolve(value):
+    """A limiter may answer at once (in memory) or be awaited (shared in PostgreSQL)."""
+    return await value if inspect.isawaitable(value) else value
 
 
 def build_compact_mcp(compact: Compact) -> tuple[Server, StreamableHTTPSessionManager]:
@@ -104,10 +110,10 @@ class McpAuth:
             await send({"type": "http.response.body", "body": body})
             return
         if self.limiter is not None and self.limiter.enabled:
-            allowed, retry_after = self.limiter.check(user.key_id)
+            allowed, retry_after = await _resolve(self.limiter.check(user.key_id))
             if not allowed:
                 if self.tools is not None:
-                    await self.tools.record_rate_limited(user, self.limiter.per_minute, self.limiter.first_rejection(user.key_id))
+                    await self.tools.record_rate_limited(user, self.limiter.per_minute, await _resolve(self.limiter.first_rejection(user.key_id)))
                 body = json.dumps({"error": f"rate limit exceeded: at most {self.limiter.per_minute} requests per minute for this key",
                                    "retry_after_seconds": retry_after}).encode()
                 await send({"type": "http.response.start", "status": 429, "headers": [

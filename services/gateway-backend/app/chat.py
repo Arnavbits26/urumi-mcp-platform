@@ -186,6 +186,13 @@ def _rate_limited(g, user_id: str) -> bool:
     return False
 
 
+async def _chat_limited(g, user_id: str) -> bool:
+    if g.settings.rate_limit_store == "postgres":
+        allowed, _ = await g.windows.check_and_add(f"chat:{user_id}", g.settings.chat_rate_per_minute, 60.0)
+        return not allowed
+    return _rate_limited(g, user_id)
+
+
 @router.get("/chat/status")
 async def chat_status(request: Request, _: AuthUser = Depends(current_user)):
     llm = gw(request).llm
@@ -199,7 +206,7 @@ async def chat(body: ChatIn, request: Request, user: AuthUser = Depends(current_
         raise HTTPException(503, "The chat assistant is not set up yet. An admin needs to add an AI service key (scripts/llm-secret.sh).")
     if body.messages[-1].role != "user":
         raise HTTPException(422, "The last message must come from the user.")
-    if _rate_limited(g, user.id):
+    if await _chat_limited(g, user.id):
         raise HTTPException(429, "You are sending messages too quickly. Wait a moment and try again.")
     try:
         out = await asyncio.wait_for(

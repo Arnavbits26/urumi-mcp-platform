@@ -46,7 +46,7 @@ If any step fails, stop and report it; do not continue.
 ## 2. Build the images (Docker open)
 
 ```bash
-./scripts/prod/export-images.sh      # builds urumi/*:0.9.2 and saves dist/urumi-images-0.9.2.tar
+./scripts/prod/export-images.sh      # builds urumi/*:0.9.3 and saves dist/urumi-images-0.9.3.tar
 ```
 
 ## 3. Quit Docker Desktop
@@ -89,8 +89,8 @@ address. For the external-client script use `URUMI_URL=http://gateway.$BASE_DOMA
 helm history gateway -n gateway                  # revisions of the release
 ```
 
-A normal upgrade is a new image version: `VERSION=0.9.3 ./scripts/prod/export-images.sh`, import, then
-`VERSION=0.9.3 ./scripts/prod/deploy.sh`. Data volumes stay.
+A normal upgrade is a new image version: `VERSION=0.9.4 ./scripts/prod/export-images.sh`, import, then
+`VERSION=0.9.4 ./scripts/prod/deploy.sh`. Data volumes stay.
 
 To show a **safe failure**, upgrade to an image that does not exist. `--atomic` makes Helm undo the upgrade itself:
 
@@ -100,7 +100,7 @@ if [ -z "$BASE_DOMAIN" ]; then
   echo "STOP: BASE_DOMAIN is empty. Run the export line first."
 else
   helm upgrade gateway charts/gateway -n gateway -f deploy/values-gateway-prod.yaml \
-    --set host=gateway.$BASE_DOMAIN --set image.tag=0.0.0-bad --set dashboard.image.tag=0.9.2 \
+    --set host=gateway.$BASE_DOMAIN --set image.tag=0.0.0-bad --set dashboard.image.tag=0.9.3 \
     --atomic --timeout 2m
 fi
 kubectl -n gateway get pods          # the old pod kept serving the whole time
@@ -152,3 +152,15 @@ Or roll back by hand to any revision: `helm rollback gateway 1 -n gateway`.
 ## Removing it
 
 `./scripts/prod/vm-destroy.sh` deletes the VM and all its data.
+
+## 8. Scaling the gateway
+
+```bash
+helm upgrade gateway charts/gateway -n gateway -f deploy/values-gateway-prod.yaml \
+  --set host=gateway.$BASE_DOMAIN --set replicaCount=2 --set settings.rateLimitStore=postgres --wait --timeout 5m
+```
+
+The chart refuses `replicaCount` above 1 without `settings.rateLimitStore=postgres`, because otherwise every replica counts
+requests on its own and each limit multiplies by the number of replicas. Add `--set settings.servedByHeader=true` to see which
+replica answered. A single-node k3s VM runs both replicas on the same machine, so this shows the behaviour and not node-level
+resilience. PostgreSQL stays one pod.

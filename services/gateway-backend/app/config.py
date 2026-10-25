@@ -58,5 +58,11 @@ class Settings:
         # Requests per API key per window on /mcp. 0 turns the limit off. The window is only changed in tests.
         self.mcp_rate_limit_per_minute = int(os.environ.get("MCP_RATE_LIMIT_PER_MINUTE", "120"))
         self.mcp_rate_window_seconds = float(os.environ.get("MCP_RATE_WINDOW_SECONDS", "60"))
+        # Where request counts live. "memory" is right for one replica; with several, use "postgres" so they share one count.
+        self.rate_limit_store = os.environ.get("RATE_LIMIT_STORE", "memory").strip().lower()
+        if self.rate_limit_store not in ("memory", "postgres"):
+            raise RuntimeError("RATE_LIMIT_STORE must be memory or postgres")
+        self.served_by_header = _bool("SERVED_BY_HEADER", False)      # adds X-Served-By: <pod name>, to show load balancing
+        self.instance_name = os.environ.get("HOSTNAME", "gateway")
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8080"))

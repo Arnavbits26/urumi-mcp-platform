@@ -129,7 +129,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r services/gateway-backend/requirements.txt -r services/wc-mcp-server/requirements.txt \
             -r services/mcp-notes/requirements.txt -r services/mcp-utils/requirements.txt pgserver
 
-(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client test_permissions test_ratelimit_metrics test_many_tools; do python -m tests.$t; done)
+(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client test_permissions test_ratelimit_metrics test_many_tools test_scaling; do python -m tests.$t; done)
 (cd services/mcp-utils && python -m tests.test_server)
 (cd services/mcp-notes && python -m tests.test_server)
 (cd services/wc-mcp-server && python -m tests.test_end_to_end)
@@ -152,7 +152,7 @@ upstreams, roles, hashed API keys, an audit log, and the dashboard chat with a t
 | 2 Tool permissions | done (v0.9.0), per role, default allow | `services/gateway-backend/app/permissions.py`, `toolservice.py`, the dashboard's Permissions page, `tests/test_permissions.py`. See "Tool permissions" below |
 | 1 Production-like VPS | done on a k3s VM, not public (a real VPS needs only DNS, an image import and TLS, all described) | `scripts/prod/`, `deploy/values-*-prod.yaml`, `docs/deploy-production.md`. Ran on a 4 GB Ubuntu VM at about 2.1 GB used. Public DNS and TLS were not exercised |
 | 6 Security hardening | partly | SSRF guard (`app/security.py`), encrypted credentials, non-root and read-only containers, NetworkPolicies on the three upstreams. Not done: default-deny everywhere, hardened database images |
-| 7 Scaling | partly: a per-key rate limit on `/mcp` (v0.9.1) | `app/ratelimit.py`. The backend keeps no per-client state, but several replicas are not demonstrated, and the counters are per replica |
+| 7 Scaling | done (v0.9.1, v0.9.3): a per-key rate limit, and the gateway runs as several replicas | `app/ratelimit.py`, `app/shared.py`, the chart's `replicaCount`, `tests/test_scaling.py`. See "Scaling" below |
 | 8 Observability | partly: Prometheus `/metrics` (v0.9.1) and the audit log | `app/metrics.py`. No dashboards or alerts on top of it |
 | 9 Upgrades and rollback | documented with commands, including a failed upgrade that Helm undoes by itself | `docs/deploy-production.md`, section 7 |
 | 4 Handling many tools | done (v0.9.2): search, schema, run | `app/compact.py`, the `/mcp/compact` endpoint, the chat's "Search first" mode, `tests/test_many_tools.py` (250 tools on 10 servers). See "Handling many tools" below |
@@ -214,6 +214,33 @@ questions put the right tool first. That catalogue and those questions were writ
 messier. The search is simple on purpose: weighted word matches on the tool name, server, inputs and description, with a
 few everyday verb synonyms (no model, no index to maintain).
 
+## Scaling
+
+The gateway keeps no per-client state, and MCP is stateless, so any replica can answer any request. Run more than one:
+
+```bash
+helm upgrade gateway charts/gateway -n gateway -f deploy/values-gateway-local.yaml \
+  --set replicaCount=2 --set settings.rateLimitStore=postgres --set settings.servedByHeader=true --wait --timeout 5m
+```
+
+What had to change to make that true (everything else was already in PostgreSQL: keys, sessions, permissions, the audit log):
+
+| State | Before | Now |
+|---|---|---|
+| Request limit, chat limit, login lock-out | counted in each process's memory, so two replicas would double every limit | with `settings.rateLimitStore=postgres`, counted in one table (`rate_hits`) that all replicas share. A transaction takes a lock on the key, so two replicas cannot both let the last request through, and the database clock is used so replicas with different clocks agree |
+| An admin changes a server on one replica | the others noticed at their next timed refresh (15 s) | the replica announces it through PostgreSQL `LISTEN/NOTIFY` and the others re-check that server at once |
+| Chart | `replicas: 1` fixed | `replicaCount`, a PodDisruptionBudget when above 1, and the chart **refuses** more than one replica unless the shared store is on |
+
+`settings.servedByHeader=true` adds an `X-Served-By: <pod>` header so load balancing is visible. Defaults are one
+replica and in-memory counters, which behave as before.
+
+**Shown** (`tests/test_scaling.py`, two real replicas on one database behind a round-robin proxy): a full MCP session works across
+replicas; of 16 requests split over both replicas exactly 10 pass a limit of 10, where the in-memory control let all 16 through;
+the same for the login lock-out and the chat limit; a server disabled, added or removed on one replica is seen by the other
+in under a second; both replicas notice a dead upstream and reconnect when it returns; one replica can stop and the service
+carries on. **Not shown:** replicas on separate nodes, or a highly available PostgreSQL (it is still one pod). Metrics stay per
+replica, and Prometheus adds them up.
+
 ## Rate limits and metrics
 
 **Rate limit.** Each API key may make 120 requests a minute to `/mcp` (Helm value `settings.mcpRateLimitPerMinute`;
@@ -236,4 +263,4 @@ kubectl -n gateway exec deploy/gateway-backend -- python -c \
 ## Honest limits
 
 See the "Known gaps" list in the [threat model](docs/threat-model.md). The most important: tool permissions are
-per role and default-allow (nothing is blocked until an admin sets rules), and several gateway replicas are not demonstrated.
+per role and default-allow (nothing is blocked until an admin sets rules), and PostgreSQL is a single pod, so the gateway scales but the database does not.

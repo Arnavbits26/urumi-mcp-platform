@@ -1,5 +1,8 @@
 host: gateway.localtest.me
 
+# Gateway replicas. Above 1, also set settings.rateLimitStore=postgres (the chart refuses otherwise).
+replicaCount: 1
+
 image:
   repository: urumi/gateway
   tag: dev
@@ -45,6 +48,8 @@ settings:
   refreshIntervalSeconds: 15
   failThreshold: 2
   mcpRateLimitPerMinute: 120   # requests per API key per minute on /mcp; 0 turns the limit off
+  rateLimitStore: memory       # memory for one replica; postgres when replicaCount is above 1, so replicas share one count
+  servedByHeader: false        # true adds an X-Served-By header with the pod name, to show load balancing
 
 ingress:
   enabled: true

@@ -54,3 +54,20 @@ class RateLimiter:
             self._hits.pop(key, None)
         for key in [k for k, t in self._logged.items() if now - t >= self.window]:
             self._logged.pop(key, None)
+
+
+class SharedRateLimiter:
+    """The same limit, counted in PostgreSQL so that every gateway replica shares one count per key."""
+
+    def __init__(self, windows, per_minute: int, window: float = 60.0) -> None:
+        self.windows, self.per_minute, self.window = windows, per_minute, window
+
+    @property
+    def enabled(self) -> bool:
+        return self.per_minute > 0
+
+    async def check(self, key: str) -> tuple[bool, int]:
+        return await self.windows.check_and_add(f"mcp:{key}", self.per_minute, self.window)
+
+    async def first_rejection(self, key: str) -> bool:
+        return await self.windows.once_per_window(f"mcp-notice:{key}", self.window)

@@ -78,6 +78,23 @@ are additionally locked by NetworkPolicy so that only the gateway pods can conne
   the server and says the others are unaffected.
 - **Sessions.** Each call uses a fresh upstream session, so the gateway holds no per-client state.
 
+## Running more than one replica
+
+Almost everything the gateway needs is already in PostgreSQL (users, keys, sessions, permissions, server list, audit),
+and MCP is stateless, so any replica can serve any request. Three things were per-process and are not any more:
+
+* **Request counting** (the `/mcp` limit, the chat limit, the login lock-out) lives in `rate_hits` when
+  `RATE_LIMIT_STORE=postgres`. One transaction takes an advisory lock on the key, counts, then records, so concurrent replicas
+  cannot over-admit, and the database clock decides the window. It costs a few small queries per request, which is why the
+  default for one replica stays in memory.
+* **Server changes** are announced with `NOTIFY` and heard by every replica, which re-checks the named server exactly as the
+  replica that made the change did. The timed refresh remains as the fallback if a listener connection drops.
+* **Refreshing the registry** updates each server's entry in place and checks a new entry before swapping it in. Two things
+  went wrong before that: concurrent refreshes copied the old failure count and lost increments, and swapping in an empty
+  entry first made a server's tools vanish for the length of a slow check. `tests/test_scaling.py` covers both.
+
+Not solved: PostgreSQL is one pod, and each replica keeps its own metrics (Prometheus adds them).
+
 ## Data
 
 PostgreSQL: `users`, `api_keys` (hash only), `sessions` (hash only), `mcp_servers` (credential encrypted with

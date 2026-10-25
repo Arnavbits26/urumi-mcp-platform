@@ -1,0 +1,15 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+# With several replicas, never let a voluntary disruption (a node drain, say) take all of them down at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway-backend
+  labels:
+    {{- include "gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/name: gateway-backend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway-backend
+{{- end }}

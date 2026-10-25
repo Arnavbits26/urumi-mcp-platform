@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 import anyio
+import asyncpg
 import httpx
 from mcp import ClientSession, types
 from mcp.client.streamable_http import streamablehttp_client
@@ -23,6 +24,7 @@ from .security import CredentialBox, validate_upstream_url
 
 log = logging.getLogger("gateway.registry")
 
+CHANNEL = "urumi_servers"   # PostgreSQL notification: "the server list changed"
 SEP = "__"   # slugs cannot contain "__", so the first "__" always splits slug from tool name
 MAX_TOOL_NAME = 64
 
@@ -83,19 +85,66 @@ class Registry:
         self.db, self.box, self.cfg = db, box, settings
         self._by_slug: dict[str, Upstream] = {}
         self._task: asyncio.Task | None = None
+        self._listener: asyncio.Task | None = None
+        self._refresh_queued = False
+        self._pending: set[str] = set()
 
     # ---- lifecycle -------------------------------------------------------------------------
     async def start(self) -> None:
         await self.refresh_all()
         self._task = asyncio.create_task(self._loop(), name="registry-refresh")
+        self._listener = asyncio.create_task(self._listen(), name="registry-listen")
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
+        for task in (self._task, self._listener):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    async def _listen(self) -> None:
+        """With several gateway replicas, an admin's change lands on only one of them. That replica announces it through
+        PostgreSQL, and every replica refreshes at once. The timed refresh stays as the fallback if this connection drops."""
+        while True:
+            conn = None
             try:
-                await self._task
+                conn = await asyncpg.connect(self.db.dsn)
+                await conn.add_listener(CHANNEL, self._heard)
+                while not conn.is_closed():
+                    await asyncio.sleep(2)
             except asyncio.CancelledError:
-                pass
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.warning("change listener: %s, retrying", type(exc).__name__)
+            finally:
+                if conn is not None:
+                    try:
+                        await asyncio.wait_for(conn.close(), 2)
+                    except Exception:  # noqa: BLE001
+                        pass
+            await asyncio.sleep(3)
+
+    def _heard(self, *args) -> None:
+        """A notice names the server that changed (asyncpg passes connection, pid, channel, payload)."""
+        self._pending.add((args[3] if len(args) > 3 else "") or "*")
+        if not self._refresh_queued:
+            self._refresh_queued = True
+            asyncio.ensure_future(self._refresh_soon())
+
+    async def _refresh_soon(self) -> None:
+        await asyncio.sleep(0.05)          # several notices at once are handled together
+        self._refresh_queued = False
+        pending, self._pending = self._pending, set()
+        try:
+            if "*" in pending:
+                await self.refresh_all()
+            else:
+                for slug in sorted(pending):
+                    await self.refresh_one(slug)    # exactly what the replica that made the change did
+        except Exception:  # noqa: BLE001
+            log.exception("refresh after a change notice failed")
 
     async def _loop(self) -> None:
         while True:
@@ -141,8 +190,11 @@ class Registry:
         merged: dict[str, Upstream] = {}
         for up in fresh:
             old = previous.get(up.slug)
-            if old and old.url == up.url and old.auth_type == up.auth_type:
-                up.tools, up.failures, up.status, up.detail = old.tools, old.failures, old.status, old.detail
+            if old and old.url == up.url and old.auth_type == up.auth_type and old.header_name == up.header_name:
+                # Keep the SAME entry and update it in place. Two refreshes running at once (a timed one and a change
+                # notice) then add to one failure count, instead of each copying the old count and one being lost.
+                old.name, old.credential, old.enabled = up.name, up.credential, up.enabled
+                up = old
             merged[up.slug] = up
         self._by_slug = merged
         await asyncio.gather(*(self._check(up) for up in merged.values()), return_exceptions=True)
@@ -152,8 +204,9 @@ class Registry:
         if up is None:
             self._by_slug.pop(slug, None)
             return
-        self._by_slug[slug] = up
+        # Check first, swap afterwards: until the new answer is in, clients keep seeing the old entry instead of a gap.
         await self._check(up)
+        self._by_slug[slug] = up
 
     def forget(self, slug: str) -> None:
         self._by_slug.pop(slug, None)

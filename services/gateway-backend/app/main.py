@@ -18,7 +18,8 @@ from .compact import Compact
 from .mcp_gateway import McpAuth, build_compact_mcp, build_mcp
 from .metrics import Metrics
 from .permissions import Permissions
-from .ratelimit import RateLimiter
+from .ratelimit import RateLimiter, SharedRateLimiter
+from .shared import PgWindows
 from .registry import Registry
 from .toolservice import ToolService
 from .security import CredentialBox, hash_key, hash_password, parse_key_prefix
@@ -57,10 +58,21 @@ class Root:
     (A Starlette Mount at /mcp would 307-redirect /mcp to /mcp/, which MCP clients do not follow.)
     """
 
-    def __init__(self, api, mcp, compact=None) -> None:
-        self.api, self.mcp, self.compact = api, mcp, compact
+    def __init__(self, api, mcp, compact=None, served_by: str | None = None) -> None:
+        self.api, self.mcp, self.compact, self.served_by = api, mcp, compact, served_by
+
+    def _tagged(self, send):
+        header = (b"x-served-by", self.served_by.encode())
+
+        async def tagged(message):
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []), header]}
+            await send(message)
+        return tagged
 
     async def __call__(self, scope, receive, send) -> None:
+        if self.served_by and scope["type"] == "http":
+            send = self._tagged(send)       # which replica answered: makes load balancing visible
         if scope["type"] == "http" and scope["path"] in ("/mcp", "/mcp/"):
             return await self.mcp(scope, receive, send)
         if scope["type"] == "http" and self.compact is not None and scope["path"] in ("/mcp/compact", "/mcp/compact/"):
@@ -75,7 +87,10 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
     registry = Registry(db, box, settings)
     permissions = Permissions(db)
     metrics = Metrics()
-    limiter = RateLimiter(settings.mcp_rate_limit_per_minute, settings.mcp_rate_window_seconds)
+    windows = PgWindows(db)
+    limiter = (SharedRateLimiter(windows, settings.mcp_rate_limit_per_minute, settings.mcp_rate_window_seconds)
+               if settings.rate_limit_store == "postgres"
+               else RateLimiter(settings.mcp_rate_limit_per_minute, settings.mcp_rate_window_seconds))
     tools = ToolService(db, registry, permissions, metrics)
     llm = (LLMClient(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout, transport=llm_transport)
            if settings.llm_api_key else None)
@@ -97,7 +112,7 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
         await db.close()
 
     api = FastAPI(title="Urumi MCP Gateway", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
-    api.state.gw = SimpleNamespace(db=db, registry=registry, box=box, settings=settings, tools=tools, permissions=permissions, compact=compact, llm=llm)
+    api.state.gw = SimpleNamespace(db=db, registry=registry, box=box, settings=settings, tools=tools, permissions=permissions, compact=compact, windows=windows, llm=llm)
     api.include_router(router)
     api.include_router(chat_router)
 
@@ -118,4 +133,5 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
         # Not routed by the Ingress (it sends only /api and /mcp here), so only in-cluster scrapers reach it.
         return PlainTextResponse(metrics.render(registry.all()), media_type="text/plain; version=0.0.4; charset=utf-8")
 
-    return Root(api, McpAuth(manager, db, limiter, tools), McpAuth(compact_manager, db, limiter, tools))
+    return Root(api, McpAuth(manager, db, limiter, tools), McpAuth(compact_manager, db, limiter, tools),
+                served_by=settings.instance_name if settings.served_by_header else None)

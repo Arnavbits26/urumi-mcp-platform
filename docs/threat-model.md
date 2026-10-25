@@ -75,7 +75,8 @@ privilege escalation, capabilities dropped. Databases and WordPress run the vend
 
 1. Default-deny NetworkPolicies and egress control for every namespace. 2. Hardened database images.
 3. Approval or pinning of tool definitions. 4. Backups. 5. Tool permissions are per role and default-allow;
-per-person rules and a deny-by-default mode are not built. 6. The `/mcp` rate limit is per key and per replica,
-does not cover the REST API, and does not slow down someone guessing keys (bad keys are refused, not counted).
+per-person rules and a deny-by-default mode are not built. 6. The `/mcp` rate limit is per key. It is shared across replicas only when
+`RATE_LIMIT_STORE=postgres` (the chart insists on it above one replica); with the default in-memory store it is per replica. It does not
+cover the REST API, and does not slow down someone guessing keys (bad keys are refused, not counted).
 7. `/metrics` has no authentication: it is reachable only from inside the cluster, where any pod could read
 server and tool names and call counts. There are no dashboards or alerts on top of it.

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from .auth import AuthUser, authenticate, authenticate_session, bearer_token
 from .permissions import ROLES, WILDCARD, decide, valid_tool
-from .registry import public_name
+from .registry import CHANNEL, public_name
 from .security import (DUMMY_PASSWORD_HASH, generate_api_key, generate_session_token, generate_temp_password,
                        hash_password, hash_session_token, validate_header_name, validate_upstream_url,
                        verify_password)
@@ -81,18 +81,31 @@ def _throttled(g, key: str) -> bool:
     return len(recent) >= _MAX_FAILS
 
 
+async def _login_throttled(g, key: str) -> bool:
+    if g.settings.rate_limit_store == "postgres":
+        return await g.windows.count(f"login:{key}", _WINDOW) >= _MAX_FAILS
+    return _throttled(g, key)
+
+
+async def _record_login_failure(g, key: str) -> None:
+    if g.settings.rate_limit_store == "postgres":
+        await g.windows.add(f"login:{key}")
+    else:
+        _failures(g).setdefault(key, []).append(time.monotonic())
+
+
 @router.post("/auth/login")
 async def login(body: LoginIn, request: Request, response: Response):
     g = gw(request)
     email = body.email.strip().lower()
     throttle_key = f"{email}|{request.client.host if request.client else '?'}"
-    if _throttled(g, throttle_key):
+    if await _login_throttled(g, throttle_key):
         raise HTTPException(429, "Too many failed attempts. Wait a few minutes and try again.")
     row = await g.db.fetchrow("SELECT * FROM users WHERE email=$1", email)
     # Always run one password check, even for unknown emails, so timing does not reveal which emails exist.
     ok = await asyncio.to_thread(verify_password, body.password, row["password_hash"] if row else DUMMY_PASSWORD_HASH)
     if not (row and ok and not row["disabled"]):
-        _failures(g).setdefault(throttle_key, []).append(time.monotonic())
+        await _record_login_failure(g, throttle_key)
         raise HTTPException(401, "Incorrect email or password.")
     token, token_hash = generate_session_token()
     hours = g.settings.session_hours
@@ -154,6 +167,14 @@ def server_out(row, registry) -> dict:
     }
 
 
+async def _announce(g, slug: str = "") -> None:
+    """Tell every gateway replica that this server changed, so none waits for its next timed refresh."""
+    try:
+        await g.db.notify(CHANNEL, slug)
+    except Exception:  # noqa: BLE001 - the change is saved; the timed refresh will catch up
+        pass
+
+
 async def _check_url(request: Request, url: str) -> None:
     try:
         await validate_upstream_url(url, gw(request).settings.allow_loopback_upstreams)
@@ -188,6 +209,7 @@ async def create_server(body: ServerIn, request: Request, _: AuthUser = Depends(
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(409, f"slug '{body.slug}' already exists") from exc
     await g.registry.refresh_one(body.slug)
+    await _announce(g, body.slug)
     return server_out(await g.db.fetchrow("SELECT * FROM mcp_servers WHERE id=$1", row["id"]), g.registry)
 
 
@@ -226,6 +248,7 @@ async def update_server(server_id: str, body: ServerPatch, request: Request, _: 
            WHERE id=$1::uuid""",
         server_id, new["name"], new["url"], new["auth_type"], new["auth_header_name"], new["credential_enc"], new["enabled"])
     await g.registry.refresh_one(row["slug"])
+    await _announce(g, row["slug"])
     return server_out(await g.db.fetchrow("SELECT * FROM mcp_servers WHERE id=$1::uuid", server_id), g.registry)
 
 
@@ -237,6 +260,7 @@ async def delete_server(server_id: str, request: Request, _: AuthUser = Depends(
         raise HTTPException(404, "server not found")
     g.registry.forget(row["slug"])
     await g.permissions.forget_server(row["slug"])     # a server added later under the same name starts with no rules
+    await _announce(g, row["slug"])
 
 
 @router.post("/servers/{server_id}/refresh")
@@ -246,6 +270,7 @@ async def refresh_server(server_id: str, request: Request, _: AuthUser = Depends
     if row is None:
         raise HTTPException(404, "server not found")
     await g.registry.refresh_one(row["slug"])
+    await _announce(g, row["slug"])
     return server_out(await g.db.fetchrow("SELECT * FROM mcp_servers WHERE id=$1::uuid", server_id), g.registry)
 
 
