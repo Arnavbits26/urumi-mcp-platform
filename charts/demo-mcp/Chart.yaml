@@ -2,5 +2,5 @@ apiVersion: v2
 name: demo-mcp
 description: One reusable chart for the small MCP servers (notes, utils). Cluster-internal only, credential from a Secret.
 type: application
-version: 0.8.0
-appVersion: "0.8.0"
+version: 0.9.0
+appVersion: "0.9.0"

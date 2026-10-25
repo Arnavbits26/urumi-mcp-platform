@@ -15,6 +15,7 @@ from .llm import LLMClient
 from .config import Settings
 from .db import Database
 from .mcp_gateway import McpAuth, build_mcp
+from .permissions import Permissions
 from .registry import Registry
 from .toolservice import ToolService
 from .security import CredentialBox, hash_key, hash_password, parse_key_prefix
@@ -67,7 +68,8 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
     db = Database(settings.database_url)
     box = CredentialBox(settings.encryption_key)
     registry = Registry(db, box, settings)
-    tools = ToolService(db, registry)
+    permissions = Permissions(db)
+    tools = ToolService(db, registry, permissions)
     llm = (LLMClient(settings.llm_base_url, settings.llm_api_key, settings.llm_model, settings.llm_timeout, transport=llm_transport)
            if settings.llm_api_key else None)
     _, manager = build_mcp(tools)
@@ -86,7 +88,7 @@ def create_asgi(settings: Settings | None = None, llm_transport=None) -> Root:
         await db.close()
 
     api = FastAPI(title="Urumi MCP Gateway", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
-    api.state.gw = SimpleNamespace(db=db, registry=registry, box=box, settings=settings, tools=tools, llm=llm)
+    api.state.gw = SimpleNamespace(db=db, registry=registry, box=box, settings=settings, tools=tools, permissions=permissions, llm=llm)
     api.include_router(router)
     api.include_router(chat_router)
 

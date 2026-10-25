@@ -84,7 +84,7 @@ def result_text(result: types.CallToolResult) -> str:
 # ---- the loop -----------------------------------------------------------------------------------
 
 async def run_agent(llm, tools: ToolService, user: AuthUser, history: list[dict], max_steps: int) -> dict:
-    model_tools = to_model_tools(tools.list_tools())
+    model_tools = to_model_tools(await tools.list_tools(user))
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT.format(today=datetime.now(timezone.utc).date().isoformat())}]
     messages += history[-MAX_HISTORY:]
     trace: list[dict] = []

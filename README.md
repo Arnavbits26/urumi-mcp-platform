@@ -129,7 +129,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r services/gateway-backend/requirements.txt -r services/wc-mcp-server/requirements.txt \
             -r services/mcp-notes/requirements.txt -r services/mcp-utils/requirements.txt pgserver
 
-(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client; do python -m tests.$t; done)
+(cd services/gateway-backend && for t in test_gateway_e2e test_dashboard_login test_ui_contract test_chat test_demo_upstreams test_external_client test_permissions; do python -m tests.$t; done)
 (cd services/mcp-utils && python -m tests.test_server)
 (cd services/mcp-notes && python -m tests.test_server)
 (cd services/wc-mcp-server && python -m tests.test_end_to_end)
@@ -149,14 +149,39 @@ upstreams, roles, hashed API keys, an audit log, and the dashboard chat with a t
 
 | Item | Status | Where |
 |---|---|---|
+| 2 Tool permissions | done (v0.9.0), per role, default allow | `services/gateway-backend/app/permissions.py`, `toolservice.py`, the dashboard's Permissions page, `tests/test_permissions.py`. See "Tool permissions" below |
 | 1 Production-like VPS | done on a k3s VM, not public (a real VPS needs only DNS, an image import and TLS, all described) | `scripts/prod/`, `deploy/values-*-prod.yaml`, `docs/deploy-production.md`. Ran on a 4 GB Ubuntu VM at about 2.1 GB used. Public DNS and TLS were not exercised |
 | 6 Security hardening | partly | SSRF guard (`app/security.py`), encrypted credentials, non-root and read-only containers, NetworkPolicies on the three upstreams. Not done: default-deny everywhere, hardened database images |
 | 7 Scaling | design only | the backend keeps no per-client state, but several replicas are not demonstrated; the chat limiter and login throttle are per replica |
 | 8 Observability | audit log only | no metrics |
 | 9 Upgrades and rollback | documented with commands, including a failed upgrade that Helm undoes by itself | `docs/deploy-production.md`, section 7 |
-| 2, 3, 4, 5, bonus multi-store | not attempted | |
+| 3, 4, 5, bonus multi-store | not attempted | |
+
+## Tool permissions
+
+An admin controls which tools each role may use. **Everything is allowed until you block it**, so a fresh install
+behaves exactly as before. Rules are per role (`member` or `admin`). A rule names a server and a tool, or `*` for
+every tool of that server, and the most specific rule wins (tool, then server, then the default).
+
+A blocked tool is **hidden** from the tool list that external MCP clients and the dashboard chat see, and a direct
+call to it is **rejected** (audit outcome `rejected`, reason "not permitted for the member role"). The upstream
+server is never contacted. One check inside `ToolService` covers both the MCP endpoint and the chat.
+
+In the dashboard, open **Permissions** (admins only). Each server has a Members column and an Admins column, and
+**Make read-only for members** blocks that server's write-style tools (names starting with create, update, delete,
+add, and similar) after showing you the list. By API, with an admin key:
+
+```bash
+curl -s -X PUT http://gateway.localtest.me:8080/api/permissions \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"changes":[{"role":"member","server":"woocommerce","tool":"create_product","allow":false},
+                  {"role":"member","server":"woocommerce","tool":"update_order_status","allow":false}]}'
+```
+
+`allow: true` or `false` sets a rule; `null` removes it. `GET /api/permissions` returns what each role may do and
+which rule decided it. Removing a server removes its rules.
 
 ## Honest limits
 
-See the "Known gaps" list in the [threat model](docs/threat-model.md). The most important: there are no per-tool
-permissions yet, so any member can call any tool the gateway offers.
+See the "Known gaps" list in the [threat model](docs/threat-model.md). The most important: there is no rate limit
+on `/mcp`, and tool permissions are per role and default-allow (nothing is blocked until an admin sets rules).

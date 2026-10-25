@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from .auth import AuthUser, authenticate, authenticate_session, bearer_token
+from .permissions import ROLES, WILDCARD, decide, valid_tool
 from .registry import public_name
 from .security import (DUMMY_PASSWORD_HASH, generate_api_key, generate_session_token, generate_temp_password,
                        hash_password, hash_session_token, validate_header_name, validate_upstream_url,
@@ -235,6 +236,7 @@ async def delete_server(server_id: str, request: Request, _: AuthUser = Depends(
     if row is None:
         raise HTTPException(404, "server not found")
     g.registry.forget(row["slug"])
+    await g.permissions.forget_server(row["slug"])     # a server added later under the same name starts with no rules
 
 
 @router.post("/servers/{server_id}/refresh")
@@ -374,9 +376,59 @@ async def revoke_key(key_id: str, request: Request, user: AuthUser = Depends(cur
 
 # ---------------------------------------------------------------------------- tools and audit
 @router.get("/tools")
-async def tools(request: Request, _: AuthUser = Depends(current_user)):
+async def tools(request: Request, user: AuthUser = Depends(current_user)):
     return [{"name": public_name(up.slug, t.name), "server": up.slug, "description": t.description}
-            for up, t in gw(request).registry.listed_tools()]
+            for up, t in await gw(request).tools.visible(user)]
+
+
+# ---------------------------------------------------------------------------- tool permissions (per role)
+class RuleChange(BaseModel):
+    role: Literal["admin", "member"]
+    server: str = Field(pattern=SLUG)
+    tool: str = Field(default=WILDCARD, max_length=64)     # a tool name, or "*" for every tool of the server
+    allow: bool | None = None                              # true = allow, false = block, null = remove the rule
+
+
+class RulesIn(BaseModel):
+    changes: list[RuleChange] = Field(min_length=1, max_length=200)
+
+
+async def _matrix(g) -> dict:
+    """Every server and tool with what each role may do, and which rule decided it."""
+    rules = await g.permissions.all_rules()
+    rows = await g.db.fetch("SELECT slug, name, enabled, status FROM mcp_servers ORDER BY created_at")
+    servers = []
+    for r in rows:
+        up = g.registry.get(r["slug"])
+        tools = []
+        for t in (up.tools if up else []):
+            access = {}
+            for role in ROLES:
+                allowed, source = decide(rules[role], r["slug"], t.name)
+                access[role] = {"allowed": allowed, "source": source}
+            tools.append({"name": t.name, "public_name": public_name(r["slug"], t.name), "description": t.description, "access": access})
+        servers.append({"slug": r["slug"], "name": r["name"], "enabled": r["enabled"], "status": r["status"],
+                        "server_rules": {role: rules[role].get((r["slug"], WILDCARD)) for role in ROLES}, "tools": tools})
+    return {"roles": list(ROLES), "servers": servers}
+
+
+@router.get("/permissions")
+async def get_permissions(request: Request, _: AuthUser = Depends(admin_user)):
+    return await _matrix(gw(request))
+
+
+@router.put("/permissions")
+async def set_permissions(body: RulesIn, request: Request, admin: AuthUser = Depends(admin_user)):
+    g = gw(request)
+    for c in body.changes:
+        if not valid_tool(c.tool):
+            raise HTTPException(400, f"invalid tool name '{c.tool[:40]}'")
+    known = {r["slug"] for r in await g.db.fetch("SELECT slug FROM mcp_servers")}
+    for c in body.changes:
+        if c.server not in known:
+            raise HTTPException(404, f"unknown server '{c.server}'")
+    await g.permissions.apply([c.model_dump() for c in body.changes], admin.email)
+    return await _matrix(g)
 
 
 def audit_out(r) -> dict:

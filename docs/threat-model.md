@@ -16,8 +16,13 @@ member can delete any note. The upstream sees only the gateway's credential, so 
 
 What limits the damage today: members cannot register, edit or remove servers; every call is audited with the
 person's name; a leaked member key can be revoked at once; the upstreams accept connections only from the
-gateway (credential plus NetworkPolicy). **What does not exist yet:** per-tool or per-role permissions, so
-"members read orders, only admins change them" is not enforced. That is the most important next control.
+gateway (credential plus NetworkPolicy). **Per-role tool permissions (v0.9.0):** an admin can block individual
+tools, or a whole server, for the member role (and for admins). A blocked tool is hidden from the tool list that
+MCP clients and the chat see, and a direct call is rejected and audited with outcome `rejected`; the upstream is
+never contacted. For example, "members read orders, only admins create products or change order status" is
+two rules, or one click (Make read-only for members). **Limits of this control:** the default is allow, so
+nothing is restricted until an admin sets rules; rules are per role, not per person; and tools are matched by the
+name the upstream reports, so a server that renames a tool would need its rule set again.
 
 ## 2. Why client tokens are not passed through to upstream servers
 
@@ -68,6 +73,6 @@ privilege escalation, capabilities dropped. Databases and WordPress run the vend
 
 ## Known gaps, in priority order
 
-1. Per-tool and per-role permissions. 2. Rate limits on `/mcp`. 3. Default-deny NetworkPolicies and egress
-control for every namespace. 4. Hardened database images. 5. Approval or pinning of tool definitions.
-6. Metrics and alerts. 7. Backups.
+1. Rate limits on `/mcp`. 2. Default-deny NetworkPolicies and egress control for every namespace. 3. Hardened
+database images. 4. Approval or pinning of tool definitions. 5. Metrics and alerts. 6. Backups. 7. Tool
+permissions are per role and default-allow; per-person rules and a deny-by-default mode are not built.

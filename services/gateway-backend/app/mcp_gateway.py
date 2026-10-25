@@ -30,7 +30,7 @@ def build_mcp(tools: ToolService) -> tuple[Server, StreamableHTTPSessionManager]
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
-        return tools.list_tools()
+        return await tools.list_tools(caller())
 
     @server.call_tool(validate_input=False)   # the upstream validates its own arguments
     async def call_tool(name: str, arguments: dict) -> types.CallToolResult:

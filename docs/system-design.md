@@ -43,7 +43,7 @@ are additionally locked by NetworkPolicy so that only the gateway pods can conne
 |---|---|
 | `charts/store` | WordPress, MariaDB, volumes, ingress, and an idempotent WP-CLI Job that installs WooCommerce |
 | `services/wc-mcp-server` | MCP server for the store: list/create products, list/get orders, update order status, over the WooCommerce REST API |
-| `services/gateway-backend` | Users, keys, sessions, server registry, tool aggregation and routing, audit log, REST API, chat agent |
+| `services/gateway-backend` | Users, keys, sessions, server registry, tool aggregation and routing, per-role tool permissions, audit log, REST API, chat agent |
 | `services/dashboard` | React app served by nginx: servers, team, keys, audit log, chat |
 | `services/mcp-notes`, `mcp-utils` | Two further upstreams (stateful with bearer auth, stateless with header auth) |
 
@@ -53,7 +53,9 @@ are additionally locked by NetworkPolicy so that only the gateway pods can conne
 2. `McpAuth` hashes the key (SHA-256), looks up its public 8-character id, compares in constant time, and rejects
    revoked keys and disabled users. The database is checked on every request.
 3. `ToolService.call` splits `woocommerce__list_orders` at the first `__` into server `woocommerce` and tool
-   `list_orders`, and checks the server is enabled, connected, and really offers that tool.
+   `list_orders`, and checks the server is enabled, **that the caller's role may use that tool** (`permissions.py`;
+   a blocked tool is rejected with outcome `rejected`), the server is connected, and it really offers the tool.
+   The same rules filter `tools/list`, so a blocked tool is hidden as well as refused.
 4. The registry opens a short-lived MCP session to that one upstream, injecting the gateway's **own stored
    credential** for it, and calls the tool under a hard timeout.
 5. The result goes back to the client, and one audit row is written (user, key prefix, server, tool, duration,
@@ -78,7 +80,7 @@ are additionally locked by NetworkPolicy so that only the gateway pods can conne
 ## Data
 
 PostgreSQL: `users`, `api_keys` (hash only), `sessions` (hash only), `mcp_servers` (credential encrypted with
-Fernet), `audit_log`. The schema is created with `CREATE TABLE IF NOT EXISTS` under an advisory lock at start.
+Fernet), `tool_rules` (role, server, tool or `*`, allow), `audit_log`. The schema is created with `CREATE TABLE IF NOT EXISTS` under an advisory lock at start.
 
 ## Kubernetes layout
 
@@ -103,6 +105,7 @@ edits. (A caveat: inside the cluster that name also resolves to 127.0.0.1, which
 | Tool list | Cached, refreshed in the background | Isolation from slow upstreams. Costs up to 15 s of staleness. |
 | API key hashing | SHA-256 | Keys are 256-bit random, so there is nothing to brute-force, and checking happens on every request. Passwords (human-chosen) use scrypt instead. |
 | Dashboard auth | Server-side sessions, not JWT | Logout, disabling and resets take effect at once. Costs one database read per request. |
+| Tool permissions | Per role, default allow, most specific rule wins | A fresh install behaves as before, and the rules are few enough to read at a glance. Per-person rules and deny-by-default are the next step. Enforced in `ToolService`, so the MCP endpoint and the chat cannot differ. |
 | Chat and MCP | One shared `ToolService` | One code path to secure and audit. The chat does not go through HTTP `/mcp`, so it is not the same as an external client over the network. |
 | Schema | `CREATE IF NOT EXISTS` | Simple for one release; a migration tool is needed once the schema must change in place. |
 | AI service | Any OpenAI-compatible API, free tier by default | No cost and no lock-in. Low rate limits, so the agent trims prompts, retries on 429 and limits each user. |

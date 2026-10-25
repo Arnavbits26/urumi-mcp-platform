@@ -3,6 +3,7 @@ import { api, onUnauthorized } from './api.js'
 import Login from './pages/Login.jsx'
 import Servers from './pages/Servers.jsx'
 import Team from './pages/Team.jsx'
+import Permissions from './pages/Permissions.jsx'
 import KeysPage from './pages/Keys.jsx'
 import Activity from './pages/Activity.jsx'
 import Chat from './pages/Chat.jsx'
@@ -32,7 +33,7 @@ export default function App() {
 
   const admin = me.role === 'admin'
   const pages = [
-    ...(admin ? [{ id: 'servers', label: 'Servers' }, { id: 'team', label: 'Team' }] : []),
+    ...(admin ? [{ id: 'servers', label: 'Servers' }, { id: 'team', label: 'Team' }, { id: 'permissions', label: 'Permissions' }] : []),
     { id: 'chat', label: 'Chat' },
     { id: 'keys', label: 'API keys' },
     { id: 'activity', label: admin ? 'Audit log' : 'My activity' },
@@ -71,6 +72,7 @@ export default function App() {
       <main className="content">
         {current.id === 'servers' && <Servers />}
         {current.id === 'team' && <Team me={me} />}
+        {current.id === 'permissions' && <Permissions />}
         {current.id === 'chat' && <Chat me={me} />}
         {current.id === 'keys' && <KeysPage />}
         {current.id === 'activity' && <Activity me={me} />}

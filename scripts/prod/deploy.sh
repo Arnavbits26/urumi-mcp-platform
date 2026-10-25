@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 BASE="${BASE_DOMAIN:?Set BASE_DOMAIN first, for example: BASE_DOMAIN=192.168.64.5.nip.io}"
-VERSION="${VERSION:-0.8.0}"
+VERSION="${VERSION:-0.9.0}"
 
 CONTEXT="$(kubectl config current-context)"
 case "$CONTEXT" in

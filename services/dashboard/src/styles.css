@@ -207,3 +207,23 @@ section > h2 { margin-bottom: 0.75rem; }
 .composer { position: sticky; bottom: 0; display: flex; gap: 0.6rem; align-items: flex-end; max-width: 46rem; padding: 0.9rem 0 0.4rem; background: var(--ground); }
 .composer textarea { flex: 1; font: inherit; color: var(--ink); background: #fff; padding: 0.55rem 0.65rem; border: 1px solid var(--rule-strong); border-radius: 3px; resize: vertical; min-height: 3.2rem; }
 .via { margin-left: 0.5rem; font-size: 0.8rem; color: var(--action); font-weight: 600; }
+
+/* ---- permissions page ---- */
+.perm-server { margin: 1.6rem 0 2rem; }
+.perm-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.perm-head .server-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.perm-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--rule); }
+.perm-table th, .perm-table td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.perm-table thead th { font-size: 0.82rem; text-transform: none; color: var(--ink-soft); font-weight: 600; background: var(--note-wash); }
+.perm-table tbody th { font-weight: 500; }
+.perm-table tbody th code { display: block; }
+.perm-desc { display: block; color: var(--ink-soft); font-size: 0.85rem; margin-top: 0.15rem; }
+.perm { font: inherit; font-size: 0.88rem; font-weight: 650; padding: 0.25rem 0.8rem; border-radius: 999px; cursor: pointer; border: 1px solid var(--rule-strong); background: var(--panel); min-width: 5.6rem; }
+.perm:disabled { opacity: 0.55; cursor: not-allowed; }
+.perm-allowed { color: var(--ok); border-color: #9ccbb4; }
+.perm-allowed:hover:not(:disabled) { background: #e8f3ed; }
+.perm-blocked { color: #fff; background: var(--bad); border-color: var(--bad); }
+.perm-blocked:hover:not(:disabled) { background: #9c2d22; }
+.perm-source { display: block; margin-top: 0.25rem; font-size: 0.78rem; color: var(--ink-soft); }
+.perm-reset { padding: 0 0.4rem; font-size: 0.78rem; }
+.perm-list { margin: 0.5rem 0 0.2rem; padding-left: 1rem; list-style: disc; }

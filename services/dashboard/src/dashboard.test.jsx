@@ -336,3 +336,124 @@ describe('chat', () => {
     expect(await screen.findByText('via chat')).toBeInTheDocument()
   })
 })
+
+describe('permissions', () => {
+  const access = (member = true, admin = true, memberSource = 'default', adminSource = 'default') => ({
+    member: { allowed: member, source: memberSource },
+    admin: { allowed: admin, source: adminSource },
+  })
+  const ptool = (server, name, acc = access()) => ({ name, public_name: `${server}__${name}`, description: `${name} description`, access: acc })
+  const matrix = (wooTools) => ({
+    roles: ['admin', 'member'],
+    servers: [
+      {
+        slug: 'woocommerce', name: 'WooCommerce', enabled: true, status: 'connected', server_rules: { admin: null, member: null },
+        tools: wooTools ?? ['list_orders', 'create_product', 'update_order_status'].map((n) => ptool('woocommerce', n)),
+      },
+      { slug: 'notes', name: 'Notes', enabled: true, status: 'unreachable', server_rules: { admin: null, member: null }, tools: [] },
+    ],
+  })
+  const blockedMember = (names, source = 'tool') =>
+    ['list_orders', 'create_product', 'update_order_status'].map((n) => ptool('woocommerce', n, names.includes(n) ? access(false, true, source) : access()))
+
+  async function open(m = matrix(), extra = {}) {
+    window.location.hash = '#/permissions'
+    const calls = fakeGateway({ 'GET /api/me': [200, ADMIN], 'GET /api/permissions': [200, m], ...extra })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Permissions' })
+    return calls
+  }
+  const woo = () => screen.getByRole('region', { name: 'WooCommerce' })
+
+  it('is in the admin menu, and a member does not get it', async () => {
+    fakeGateway({ 'GET /api/me': [200, MEMBER], 'GET /api/chat/status': [200, { configured: true, model: 'm' }] })
+    window.location.hash = '#/permissions'
+    render(<App />)
+    const nav = await screen.findByRole('navigation', { name: 'Main' })
+    expect(within(nav).queryByText('Permissions')).toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Chat' })).toBeInTheDocument()
+    cleanup()
+    fakeGateway({ 'GET /api/me': [200, ADMIN], 'GET /api/servers': [200, SERVERS] })
+    window.location.hash = ''
+    render(<App />)
+    expect(within(await screen.findByRole('navigation', { name: 'Main' })).getByText('Permissions')).toBeInTheDocument()
+  })
+
+  it('shows every tool for each role, all allowed until something is blocked', async () => {
+    await open()
+    expect(await screen.findByText('woocommerce__create_product')).toBeInTheDocument()
+    expect(within(woo()).getAllByRole('button', { name: /: allowed\./ })).toHaveLength(6)
+    expect(screen.getByText('Nothing is blocked.')).toBeInTheDocument()
+    expect(screen.getByText(/No tools are listed right now \(the server is unreachable\)/)).toBeInTheDocument()
+  })
+
+  it('blocks a tool for members with one click and shows the saved result', async () => {
+    const calls = await open(matrix(), { 'PUT /api/permissions': [200, matrix(blockedMember(['create_product']))] })
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /Members, woocommerce__create_product: allowed/ }))
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(put.url).toBe('/api/permissions')
+    expect(put.body).toEqual({ changes: [{ role: 'member', server: 'woocommerce', tool: 'create_product', allow: false }] })
+    expect(put.headers['X-Requested-With']).toBe('urumi-dashboard')
+    expect(await screen.findByRole('button', { name: /Members, woocommerce__create_product: blocked/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Admins, woocommerce__create_product: allowed/ })).toBeInTheDocument()
+    expect(screen.getByText('1 permission blocked.')).toBeInTheDocument()
+    expect(screen.getByText('set for this tool')).toBeInTheDocument()
+  })
+
+  it('the read-only preset lists the write tools, and only those, before blocking them', async () => {
+    const calls = await open(matrix(), { 'PUT /api/permissions': [200, matrix(blockedMember(['create_product', 'update_order_status']))] })
+    const user = userEvent.setup()
+    await user.click(within(woo()).getByRole('button', { name: 'Make read-only for members' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('woocommerce__create_product')).toBeInTheDocument()
+    expect(within(dialog).getByText('woocommerce__update_order_status')).toBeInTheDocument()
+    expect(within(dialog).queryByText('woocommerce__list_orders')).toBeNull()
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false) // nothing is sent until they confirm
+    await user.click(within(dialog).getByRole('button', { name: 'Block these tools for members' }))
+    const put = calls.find((c) => c.method === 'PUT')
+    expect(put.body.changes).toEqual([
+      { role: 'member', server: 'woocommerce', tool: 'create_product', allow: false },
+      { role: 'member', server: 'woocommerce', tool: 'update_order_status', allow: false },
+    ])
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByText('2 permissions blocked.')).toBeInTheDocument()
+    // once those are blocked there is nothing left for the preset to do
+    expect(within(woo()).getByRole('button', { name: 'Make read-only for members' })).toBeDisabled()
+  })
+
+  it('removes a rule with Reset', async () => {
+    const calls = await open(matrix(blockedMember(['create_product'])), { 'PUT /api/permissions': [200, matrix()] })
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Reset Members rule for woocommerce__create_product' }))
+    expect(calls.find((c) => c.method === 'PUT').body.changes).toEqual([{ role: 'member', server: 'woocommerce', tool: 'create_product', allow: null }])
+    expect(await screen.findByText('Nothing is blocked.')).toBeInTheDocument()
+  })
+
+  it('blocking a whole server asks first, and "reset member rules" clears the server rule and the tool rules', async () => {
+    const calls = await open(matrix(), { 'PUT /api/permissions': [200, matrix()] })
+    const user = userEvent.setup()
+    await user.click(within(woo()).getByRole('button', { name: 'Block for members' }))
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Block for members' }))
+    expect(calls.find((c) => c.method === 'PUT').body.changes).toEqual([{ role: 'member', server: 'woocommerce', tool: '*', allow: false }])
+    cleanup()
+    const m = matrix(blockedMember(['create_product']))
+    m.servers[0].server_rules.member = false
+    const calls2 = await open(m, { 'PUT /api/permissions': [200, matrix()] })
+    expect(screen.getByText(/Everything on this server is blocked for members/)).toBeInTheDocument()
+    await user.click(within(woo()).getByRole('button', { name: 'Reset member rules' }))
+    expect(calls2.find((c) => c.method === 'PUT').body.changes).toEqual([
+      { role: 'member', server: 'woocommerce', tool: '*', allow: null },
+      { role: 'member', server: 'woocommerce', tool: 'create_product', allow: null },
+    ])
+  })
+
+  it('shows the gateway message if a change is refused, and keeps the old state', async () => {
+    await open(matrix(), { 'PUT /api/permissions': [404, { detail: "unknown server 'woocommerce'" }] })
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /Members, woocommerce__list_orders: allowed/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("unknown server 'woocommerce'")
+    expect(screen.getByRole('button', { name: /Members, woocommerce__list_orders: allowed/ })).toBeInTheDocument()
+  })
+})

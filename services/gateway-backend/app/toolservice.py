@@ -14,6 +14,7 @@ from mcp import types
 
 from .auth import AuthUser
 from .db import Database
+from .permissions import Permissions, decide
 from .registry import Registry, UpstreamError, UpstreamTimeout, public_name, split_public_name
 
 log = logging.getLogger("gateway.tools")
@@ -34,12 +35,18 @@ def _error(message: str) -> types.CallToolResult:
 
 
 class ToolService:
-    def __init__(self, db: Database, registry: Registry) -> None:
+    def __init__(self, db: Database, registry: Registry, permissions: Permissions | None = None) -> None:
         self.db, self.registry = db, registry
+        self.permissions = permissions or Permissions(db)
 
-    def list_tools(self) -> list[types.Tool]:
+    async def visible(self, user: AuthUser) -> list:
+        """(upstream, tool) pairs this person's role may see: connected, enabled and not blocked for their role."""
+        rules = await self.permissions.rules_for(user.role)
+        return [(up, t) for up, t in self.registry.listed_tools() if decide(rules, up.slug, t.name)[0]]
+
+    async def list_tools(self, user: AuthUser) -> list[types.Tool]:
         out = []
-        for up, tool in self.registry.listed_tools():
+        for up, tool in await self.visible(user):
             desc = f"[{up.name}] {tool.description or ''}".strip()[:2000]   # upstream text is untrusted
             out.append(tool.model_copy(update={"name": public_name(up.slug, tool.name), "description": desc}))
         return out
@@ -56,7 +63,11 @@ class ToolService:
                 result = _error(f"Unknown tool '{name}'.")
             else:
                 slug, tool = parts
-                if up.status != "connected":
+                if not await self.permissions.allowed(user.role, slug, tool):
+                    # Hidden from the tool list too; this catches someone who calls a blocked tool by name.
+                    outcome, detail = "rejected", f"not permitted for the {user.role} role"
+                    result = _error(f"The tool '{name}' is not permitted for your role ({user.role}). Ask an admin if you need it.")
+                elif up.status != "connected":
                     outcome, detail = "unreachable", up.detail
                     result = _error(f"Server '{slug}' is currently unreachable ({up.detail or 'no details'}). Other servers are unaffected.")
                 elif not any(t.name == tool for t in up.tools):

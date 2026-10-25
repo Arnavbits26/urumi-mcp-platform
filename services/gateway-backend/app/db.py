@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at timestamptz NOT NULL,
   last_seen_at timestamptz
 );
+CREATE TABLE IF NOT EXISTS tool_rules (
+  role text NOT NULL CHECK (role IN ('admin','member')),
+  server_slug text NOT NULL,
+  tool_name text NOT NULL DEFAULT '*',
+  allow boolean NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  updated_by text,
+  PRIMARY KEY (role, server_slug, tool_name)
+);
 """
 
 
